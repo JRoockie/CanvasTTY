@@ -204,7 +204,13 @@ export class ProviderRuntimeLaunchAdapters {
     claudeHttpHookBase?: string,
     accountHome?: string,
     /** The card's own (already filtered) environment; the launch reads the person's OpenCode inline config from it. */
-    environment: Readonly<Record<string, string | undefined>> = this.environment
+    environment: Readonly<Record<string, string | undefined>> = this.environment,
+    /**
+     * The runtime identity this launch hands its terminal (`CANVASTTY_RUNTIME_*`). A provider whose hooks are
+     * dispatched by a process other than the one CanvasTTY started (Hermes routes a session through its own
+     * long-lived gateway) never inherits it, so such a provider's hook command carries it explicitly.
+     */
+    sessionEnvironment: Readonly<Record<string, string>> = {}
   ): PreparedProviderRuntimeLaunch {
     const pluginRegistrations = this.options.pluginHooks?.list(provider) ?? [];
     const gate = decisions && this.decisionsSupported(provider);
@@ -274,7 +280,7 @@ export class ProviderRuntimeLaunchAdapters {
       return prepared([], hookEnvironment, this.acquireKimi(coreHooksEnabled, pluginCommands));
     }
     if (provider === "hermes") {
-      return prepared([], hookEnvironment, this.acquireHermes(coreHooksEnabled, pluginCommands));
+      return prepared([], hookEnvironment, this.acquireHermes(coreHooksEnabled, pluginCommands, sessionEnvironment));
     }
     if (provider === "grok") return prepared([], hookEnvironment, this.acquireGrok(coreHooksEnabled, pluginCommands));
     return prepared([], hookEnvironment);
@@ -329,8 +335,12 @@ export class ProviderRuntimeLaunchAdapters {
     });
   }
 
-  private acquireHermes(coreHooksEnabled: boolean, pluginCommands: readonly ProviderHookCommand[]): () => void {
-    const signature = overlaySignature(coreHooksEnabled, pluginCommands);
+  private acquireHermes(
+    coreHooksEnabled: boolean,
+    pluginCommands: readonly ProviderHookCommand[],
+    sessionEnvironment: Readonly<Record<string, string>>
+  ): () => void {
+    const signature = overlaySignature(coreHooksEnabled, pluginCommands, sessionEnvironment);
     if (!this.hermesOverlay || this.hermesOverlaySignature !== signature) {
       this.hermesOverlay?.cleanup();
       this.hermesOverlay = null;
@@ -340,7 +350,8 @@ export class ProviderRuntimeLaunchAdapters {
         this.options.helper,
         this.platform,
         coreHooksEnabled,
-        pluginCommands
+        pluginCommands,
+        sessionEnvironment
       );
       this.hermesOverlaySignature = signature;
     }
@@ -922,7 +933,8 @@ export class HermesRuntimeHooks {
     helper: RuntimeHookHelperLaunch,
     platform: NodeJS.Platform,
     coreHooksEnabled: boolean,
-    pluginCommands: readonly ProviderHookCommand[]
+    pluginCommands: readonly ProviderHookCommand[],
+    sessionEnvironment: Readonly<Record<string, string>> = {}
   ): HermesRuntimeHooks {
     ensurePrivateDirectory(home);
     const path = join(home, "config.yaml");
@@ -930,13 +942,14 @@ export class HermesRuntimeHooks {
     this.recover(home);
     const original = readOptional(path);
     const commands = groupCommandsByEvent([
-      ...(coreHooksEnabled ? lifecycleCommands(HERMES_HOOKS, helper, platform) : []),
+      ...(coreHooksEnabled ? lifecycleCommandsWithEnvironment(HERMES_HOOKS, helper, platform, sessionEnvironment) : []),
       ...pluginCommands
     ]);
     const mutated = mutateHermesHooks(original ?? "", commands, false);
     const journal = createTextJournal(home, "hermes", original, mutated, { commands });
     atomicWrite(journalPath, `${JSON.stringify(journal)}\n`);
     atomicWrite(path, mutated, modeOf(path));
+    carryHookApprovals(join(home, "shell-hooks-allowlist.json"), helper, commands);
     return new HermesRuntimeHooks(path, journalPath, journal);
   }
 
@@ -1187,9 +1200,10 @@ function groupCommandsByEvent(commands: readonly ProviderHookCommand[]): Record<
 
 function overlaySignature(
   coreHooksEnabled: boolean,
-  pluginCommands: readonly ProviderHookCommand[]
+  pluginCommands: readonly ProviderHookCommand[],
+  sessionEnvironment: Readonly<Record<string, string>> = {}
 ): string {
-  return JSON.stringify([coreHooksEnabled, pluginCommands]);
+  return JSON.stringify([coreHooksEnabled, pluginCommands, sessionEnvironment]);
 }
 
 function hookCommand(
@@ -1200,6 +1214,99 @@ function hookCommand(
 ): string {
   const args = [helper.command, ...helper.args, mapping.state, mapping.event];
   return commandWithEnvironment(args, helper.env ?? {}, platform, windowsShell);
+}
+
+function lifecycleCommandsWithEnvironment(
+  mappings: readonly HookMapping[],
+  helper: RuntimeHookHelperLaunch,
+  platform: NodeJS.Platform,
+  environment: Readonly<Record<string, string>>
+): ProviderHookCommand[] {
+  return mappings.map((mapping) => ({
+    event: mapping.event,
+    ...(mapping.matcher ? { matcher: mapping.matcher } : {}),
+    command: hookCommandWithEnvironment(helper, mapping, platform, environment),
+    timeout: HOOK_TIMEOUT_SECONDS
+  }));
+}
+
+/**
+ * A Hermes hook command for a session whose hooks are dispatched by the long-lived Hermes gateway rather than by
+ * the process CanvasTTY started: the runtime identity rides in the command, because only that process's own
+ * environment carries it and the gateway's does not. Hermes runs a hook command without a shell, so `K=v cmd`
+ * would be read as the program name (the "command not found" older builds hit); `/usr/bin/env` applies the
+ * variables instead. Windows keeps the plain command: Hermes for Windows has no equivalent prefix that survives
+ * its no-shell spawn.
+ */
+function hookCommandWithEnvironment(
+  helper: RuntimeHookHelperLaunch,
+  mapping: HookMapping,
+  platform: NodeJS.Platform,
+  environment: Readonly<Record<string, string>>
+): string {
+  const args = [helper.command, ...helper.args, mapping.state, mapping.event];
+  const entries = [...Object.entries(helper.env ?? {}), ...Object.entries(environment)]
+    .filter(([, value]) => typeof value === "string" && value.length > 0);
+  if (entries.length === 0) return args.map(shellQuote).join(" ");
+  if (platform === "win32") return commandWithEnvironment(args, Object.fromEntries(entries), platform);
+  return ["/usr/bin/env", ...entries.map(([key, value]) => `${key}=${value}`), ...args]
+    .map(shellQuote)
+    .join(" ");
+}
+
+/**
+ * Hermes records consent per (event, command) pair, and the gateway silently skips a command it has not seen. The
+ * command now carries this launch's runtime identity, which changes with every session, so the approval the person
+ * already gave to this same helper binary is carried over to the refreshed command — and only then: a helper this
+ * allowlist never approved is left alone for Hermes to ask about.
+ */
+function carryHookApprovals(
+  path: string,
+  helper: RuntimeHookHelperLaunch,
+  commands: Record<string, string[]>
+): void {
+  const raw = readOptional(path);
+  if (raw === null) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.approvals)) return;
+  const approvals = [...parsed.approvals] as unknown[];
+  const approvedAt = new Date().toISOString();
+  const mtimeAt = scriptMtime(helper.command);
+  let changed = false;
+  for (const [event, eventCommands] of Object.entries(commands)) {
+    for (const command of eventCommands) {
+      const index = approvals.findIndex((entry) => isRecord(entry)
+        && entry.event === event
+        && typeof entry.command === "string"
+        && isOwnLifecycleHookText(entry.command)
+        && entry.command.includes(helper.command));
+      if (index < 0) continue;
+      approvals[index] = {
+        ...(approvals[index] as Record<string, unknown>),
+        event,
+        command,
+        approved_at: approvedAt,
+        ...(mtimeAt ? { script_mtime_at_approval: mtimeAt } : {})
+      };
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  atomicWrite(path, `${JSON.stringify({ ...parsed, approvals }, null, 2)}\n`, FILE_MODE);
+}
+
+/** Hermes compares ISO stamps as text and writes microseconds: `2026-11-16T20:15:28.451747Z`. */
+function scriptMtime(file: string): string | null {
+  try {
+    return statSync(file).mtime.toISOString().replace(/\.(\d{3})Z$/u, ".$1000Z");
+  } catch {
+    return null;
+  }
 }
 
 function pluginHookCommand(

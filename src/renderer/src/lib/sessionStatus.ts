@@ -22,6 +22,9 @@ const STATUS_ICONS: Record<SessionStatus, UiIconName | null> = {
 
 export function sessionStatusLabel(locale: LocaleId, status: SessionStatus, provider?: ProviderId): string {
   if (status === "idle" && provider === "terminal") return t(locale, "statusOpen");
+  // "Unavailable" is CanvasTTY's own blank spot — the agent has not reported a lifecycle event yet — not the
+  // session's state. The provider process is running, so the card says that instead of "status unavailable".
+  if (status === "unavailable" && provider !== undefined && provider !== "terminal") return t(locale, "statusRunning");
   return t(locale, STATUS_KEYS[status]);
 }
 

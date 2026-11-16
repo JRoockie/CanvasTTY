@@ -164,10 +164,17 @@ export class AgentRuntimeBridge implements AgentRuntimeLaunchCoordinator {
       )
       : null;
     const httpHookBase = capability && this.coreHooksEnabled ? this.claudeHttpHookBase(input) : null;
+    // The session's own runtime identity, for a provider whose hooks are dispatched by another process.
+    const sessionEnvironment: Record<string, string> = capability ? {
+      [AGENT_RUNTIME_ENV.address]: capability.address,
+      [AGENT_RUNTIME_ENV.terminalSessionId]: capability.terminalSessionId,
+      [AGENT_RUNTIME_ENV.provider]: capability.provider,
+      [AGENT_RUNTIME_ENV.capabilityToken]: capability.capabilityToken
+    } : {};
     let prepared;
     try {
       prepared = this.providers.prepare(input.provider, input.terminalSessionId, this.coreHooksEnabled, decisions, budgetMs,
-        httpHookBase ?? undefined, input.accountHome, input.environment);
+        httpHookBase ?? undefined, input.accountHome, input.environment, sessionEnvironment);
     } catch (error) {
       if (capability) this.gateway.revokeTerminalSession(input.terminalSessionId, capability.capabilityToken);
       throw error;
@@ -189,12 +196,7 @@ export class AgentRuntimeBridge implements AgentRuntimeLaunchCoordinator {
           [CAPTURE_ANSWER_ENV]: "1",
           [CAPTURE_ANSWER_EXPIRES_AT_ENV]: String(input.answerCaptureGrantExpiresAt)
         } : {}),
-        ...(capability ? {
-          [AGENT_RUNTIME_ENV.address]: capability.address,
-          [AGENT_RUNTIME_ENV.terminalSessionId]: capability.terminalSessionId,
-          [AGENT_RUNTIME_ENV.provider]: capability.provider,
-          [AGENT_RUNTIME_ENV.capabilityToken]: capability.capabilityToken
-        } : {})
+        ...sessionEnvironment
       },
       cleanup: () => {
         if (cleaned) return;
