@@ -595,3 +595,18 @@ test("deep nonexistent descendants cannot conceal a credential symlink alias", {
     hostEnvironment: w.env
   }), /protected host credentials/u);
 });
+
+test("hermes reaches the Unix socket of its own gateway, and another CLI gets no such grant", async (t) => {
+  const w = await world(t);
+  const launch = (provider, env = w.env) => isolationPaths({ provider, cwd: w.project, sessionTemp: join(w.temp, "s"), env,
+    userDataPath: w.userData, sessionId: "s" });
+  const hermes = launch("hermes");
+  // Hermes is a client of its own gateway, which listens on a Unix socket inside HERMES_HOME (~/.hermes/gateway.sock).
+  assert.ok(hermes.socketFolders.includes(join(w.home, ".hermes")), "the CLI's own home carries its socket");
+  const allowLines = seatbeltProfile(hermes).split("\n")
+    .filter((line) => line.startsWith("(allow network-outbound (remote unix-socket") && line.includes(".hermes"));
+  assert.ok(allowLines.length > 0, "the profile lets the launch connect to that socket");
+  assert.ok(!launch("codex").socketFolders.includes(join(w.home, ".hermes")), "another CLI gets no such grant");
+  const moved = launch("hermes", { ...w.env, HERMES_HOME: join(w.userData, "account-homes", "a1") });
+  assert.ok(moved.socketFolders.includes(join(w.userData, "account-homes", "a1")), "a moved HERMES_HOME is followed");
+});

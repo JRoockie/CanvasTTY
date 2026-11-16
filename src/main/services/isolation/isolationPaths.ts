@@ -248,7 +248,12 @@ export function isolationPaths(input: IsolationPathInput): IsolationPaths {
     }
   }
   const configSources = input.provider === "opencode" ? openCodeConfigPaths(input.env, input.cwd) : { jsonFiles: [], agentDirectories: [] };
+  // A CLI that is a client of its own daemon: Hermes' local gateway listens on a Unix socket inside HERMES_HOME
+  // (<home>/gateway.sock), and without that grant every turn dies with "Gateway inaccessible: authorization". The folder
+  // is the CLI's own home, already its state; no other provider gets this grant.
+  const ownSocketFolders = input.provider === "hermes" ? ownFolders : [];
   const socketFolders = [
+    ...ownSocketFolders,
     ...Object.entries(input.env)
       .filter(([name, value]) => /^CANVASTTY_.*_ADDRESS$/u.test(name) && typeof value === "string" && isAbsolute(value))
       .map(([, value]) => dirname(value!)),
