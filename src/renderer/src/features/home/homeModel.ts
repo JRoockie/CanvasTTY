@@ -17,12 +17,14 @@ export interface HomeLimitRow {
   provider: LimitProviderId;
   state: "loading" | "available" | "stale" | "unavailable" | "error";
   window: HomeLimitWindow | null;
+  /** Every window the provider reports, shortest first; monthly has no fixed length. */
+  windows: HomeLimitWindow[];
   reason: HomeLimitReason | null;
 }
 
 export interface HomeLimitWindow {
   id: string;
-  windowMinutes: number;
+  windowMinutes: number | null;
   usedPercent: number;
   resetsAt: number;
 }
@@ -93,6 +95,7 @@ function selectProviderLimit(
       provider,
       state: loadState === "loading" ? "loading" : "error",
       window: null,
+      windows: [],
       reason: loadState === "loading" ? null : "refresh-error"
     };
   }
@@ -103,6 +106,7 @@ function selectProviderLimit(
       provider,
       state: "error",
       window: null,
+      windows: [],
       reason: "refresh-error"
     };
   }
@@ -112,11 +116,13 @@ function selectProviderLimit(
       provider,
       state: "unavailable",
       window: null,
+      windows: [],
       reason: providerSnapshot.reason
     };
   }
 
-  const window = selectPreferredWindow(providerSnapshot.windows, currentTime);
+  const windows = selectHomeWindows(providerSnapshot.windows);
+  const window = selectPreferredWindow(providerSnapshot.windows, currentTime) ?? windows[0] ?? null;
   const refreshFailed = loadState === "error";
   if (!window) {
     const hasDefaultUsage = providerSnapshot.windows.some((candidate) => (
@@ -128,6 +134,7 @@ function selectProviderLimit(
       provider,
       state: providerSnapshot.state === "stale" || refreshFailed ? "stale" : "unavailable",
       window: null,
+      windows: [],
       reason: providerSnapshot.state === "stale"
         ? providerSnapshot.reason
         : refreshFailed
@@ -142,12 +149,40 @@ function selectProviderLimit(
     provider,
     state: providerSnapshot.state === "stale" || refreshFailed ? "stale" : "available",
     window,
+    windows,
     reason: providerSnapshot.state === "stale"
       ? providerSnapshot.reason
       : refreshFailed
         ? "refresh-error"
         : null
   };
+}
+
+/**
+ * Every window the person can act on, shortest first. A monthly window carries no
+ * fixed length, so it sorts last instead of being dropped: its percentage is the
+ * only thing that says how much of the month is gone.
+ */
+function selectHomeWindows(windows: readonly LimitWindow[]): HomeLimitWindow[] {
+  return windows
+    .filter((window) => (
+      window.isDefaultBucket
+      && window.usedPercent !== null
+      && Number.isFinite(window.usedPercent)
+      && window.resetsAt !== null
+      && Number.isFinite(window.resetsAt)
+    ))
+    .map((window) => ({
+      id: window.id,
+      windowMinutes: window.windowMinutes !== null
+        && Number.isFinite(window.windowMinutes)
+        && window.windowMinutes > 0
+        ? window.windowMinutes
+        : null,
+      usedPercent: clampPercent(window.usedPercent!),
+      resetsAt: window.resetsAt!
+    }))
+    .sort((left, right) => (left.windowMinutes ?? Number.MAX_SAFE_INTEGER) - (right.windowMinutes ?? Number.MAX_SAFE_INTEGER));
 }
 
 function selectPreferredWindow(windows: readonly LimitWindow[], currentTime: number): HomeLimitWindow | null {

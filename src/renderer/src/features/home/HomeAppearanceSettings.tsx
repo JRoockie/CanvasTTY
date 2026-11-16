@@ -16,7 +16,7 @@ const CORE_WIDGETS: Array<{
   size: PluginGridSize;
   required?: boolean;
 }> = [
-  { widgetId: "core.limits", label: "modelLimits", size: { columns: 7, rows: 3 } },
+  { widgetId: "core.limits", label: "modelLimits", size: { columns: 7, rows: 4 } },
   { widgetId: "core.sessions", label: "activeSessions", size: { columns: 5, rows: 3 } },
   { widgetId: "core.clock", label: "clock", size: { columns: 9, rows: 3 } },
   {

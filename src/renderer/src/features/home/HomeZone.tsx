@@ -50,6 +50,7 @@ import {
   selectHomeModel,
   type HomeLimitReason,
   type HomeLimitRow,
+  type HomeLimitWindow,
   type LimitsLoadState
 } from "./homeModel";
 import { homeCanvasWidgetId } from "../workspace/canvasWidgetFocus";
@@ -523,9 +524,11 @@ function LimitRow({ row, locale, now, onOpenSettings }: { row: HomeLimitRow; loc
         : row.state === "available"
           ? null
           : limitReasonLabel(row.reason, locale);
+  const extras = row.window ? row.windows.filter((window) => window.id !== row.window!.id) : [];
   const accessibleLabel = [
     providerLabel,
     meta,
+    ...extras.map((window) => windowMeta(window, locale, now)),
     stateLabel !== meta ? stateLabel : null
   ]
     .filter(Boolean)
@@ -546,6 +549,18 @@ function LimitRow({ row, locale, now, onOpenSettings }: { row: HomeLimitRow; loc
           <span className="limit-row__track" aria-hidden="true">
             <i className="limit-row__fill" style={{ width: `${row.window.usedPercent}%` }} />
           </span>
+          {extras.length > 0 && (
+            <span className="limit-row__windows">
+              {extras.map((window) => (
+                <span className="limit-row__window-line" key={window.id}>
+                  <span className="limit-row__window-length">{windowLabel(window.windowMinutes, locale)}</span>
+                  <span className="limit-row__window-share">{formatPercent(window.usedPercent, locale)}</span>
+                  <span className="limit-row__window-left">{limitLeft(window.usedPercent, locale)}</span>
+                  <span className="limit-row__window-reset">{formatResetCountdown(window.resetsAt, now, locale)}</span>
+                </span>
+              ))}
+            </span>
+          )}
         </span>
       ) : <span className="limit-row__empty">{stateLabel}
         {row.state !== "loading" && <button type="button" className="limits-settings-link"
@@ -557,13 +572,27 @@ function LimitRow({ row, locale, now, onOpenSettings }: { row: HomeLimitRow; loc
   );
 }
 
+/** "5 ч" / "7 д" / "месяц": a window whose length the provider does not state keeps its own name. */
+function windowLabel(windowMinutes: number | null, locale: LocaleId): string {
+  return windowMinutes === null ? t(locale, "limitWindowMonthly") : formatLimitDuration(windowMinutes, locale);
+}
+
+function windowMeta(window: HomeLimitWindow, locale: LocaleId, now: number): string {
+  return [
+    windowLabel(window.windowMinutes, locale),
+    t(locale, "limitUsedPercent").replace("{percent}", formatPercent(window.usedPercent, locale)),
+    limitLeft(window.usedPercent, locale),
+    formatReset(window.resetsAt, locale)
+  ].join(" · ") + ` (${formatResetCountdown(window.resetsAt, now, locale)})`;
+}
+
 function limitMeta(row: HomeLimitRow, locale: LocaleId): string {
   if (row.state === "loading") return t(locale, "limitLoading");
   if (row.state === "error") return t(locale, "limitError");
   if (!row.window) return limitReasonLabel(row.reason, locale);
 
   const details = [
-    formatLimitDuration(row.window.windowMinutes, locale),
+    row.window.windowMinutes === null ? null : formatLimitDuration(row.window.windowMinutes, locale),
     t(locale, "limitUsedPercent").replace("{percent}", formatPercent(row.window.usedPercent, locale)),
     limitLeft(row.window.usedPercent, locale),
     formatReset(row.window.resetsAt, locale)
