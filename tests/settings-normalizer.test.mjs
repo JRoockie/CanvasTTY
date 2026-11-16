@@ -27,7 +27,7 @@ const fallback = {
   },
   sessionRowColorMode: "status",
   homeLauncherProviders: ["codex", "claude", "qwen", "kimi", "opencode", "hermes", "grok", "omp", "pi", "cursor", "minimax", "devin", "antigravity"],
-  homeLimitProviders: ["codex", "claude", "qwen", "kimi", "opencode", "grok"],
+  homeLimitProviders: ["codex", "claude", "qwen", "kimi", "opencode", "grok", "hermes"],
   canvasLauncherItems: ["codex", "claude", "qwen", "opencode", "terminal"],
   radialLauncherItems: ["codex", "claude", "qwen", "opencode", "note", "terminal", "browser", "settings"],
   radialLauncherEnabled: false,
@@ -155,7 +155,7 @@ test("appearance shortcut migration frees F8 without replacing customized bindin
       assert.equal(loaded.agentIsolation, "off");
       assert.equal(loaded.invertTerminalWheel, true);
       const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
-      assert.equal(persisted.settingsVersion, 22);
+      assert.equal(persisted.settingsVersion, 23);
       assert.deepEqual(persisted.shortcuts, loaded.shortcuts);
       // A deliberate rebind after migration must survive the next application launch.
       await store.update({ shortcuts: { ...loaded.shortcuts, momEntered: "F8" } });
@@ -745,7 +745,7 @@ test("the Qwen migration does not rerun the older expanded-limit migration", asy
     assert.deepEqual(loaded.homeLimitProviders, ["codex", "claude", "kimi"]);
 
     const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
-    assert.equal(persisted.settingsVersion, 22);
+    assert.equal(persisted.settingsVersion, 23);
     assert.equal(persisted.agentLifecycleHooksEnabled, true);
     assert.deepEqual(persisted.homeLimitProviders, ["codex", "claude", "kimi"]);
   } finally {
@@ -768,7 +768,7 @@ test("the limit-display migration preserves a version-three launcher subset", as
     assert.deepEqual(loaded.homeLimitProviders, fallback.homeLimitProviders);
 
     const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
-    assert.equal(persisted.settingsVersion, 22);
+    assert.equal(persisted.settingsVersion, 23);
     assert.equal(persisted.agentLifecycleHooksEnabled, true);
     assert.deepEqual(persisted.homeLimitProviders, fallback.homeLimitProviders);
   } finally {
@@ -788,7 +788,7 @@ test("the expanded limit migration preserves a curated version-four subset", asy
     assert.deepEqual(loaded.homeLimitProviders, ["kimi"]);
 
     const persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
-    assert.equal(persisted.settingsVersion, 22);
+    assert.equal(persisted.settingsVersion, 23);
     assert.equal(persisted.agentLifecycleHooksEnabled, true);
     assert.deepEqual(persisted.homeLimitProviders, ["kimi"]);
   } finally {
@@ -942,7 +942,7 @@ test("existing profiles migrate minimap interaction to click and persist later c
     const store = new SettingsStore(dir, "en");
     assert.equal((await store.load()).minimapInteractionMode, "click");
     let persisted = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
-    assert.equal(persisted.settingsVersion, 22);
+    assert.equal(persisted.settingsVersion, 23);
     assert.equal(persisted.minimapInteractionMode, "click");
 
     await store.update({ minimapInteractionMode: "drag" });

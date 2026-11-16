@@ -5,7 +5,7 @@ export type { CanvasLauncherItemId, ProviderId };
 import type { UsageHistory } from "./usageHistory.ts";
 export type AgentProviderId = Exclude<ProviderId, "terminal">;
 export type AgentCliAvailability = Record<AgentProviderId, boolean>;
-export type LimitProviderId = Extract<AgentProviderId, "codex" | "claude" | "qwen" | "kimi" | "opencode" | "grok">;
+export type LimitProviderId = Extract<AgentProviderId, "codex" | "claude" | "qwen" | "kimi" | "opencode" | "grok" | "hermes">;
 /** Provider-specific launch modes and their availability are defined in autoMode.ts. */
 export type LaunchProfileId = import("./autoMode.ts").LaunchProfile;
 export type DefaultLaunchProfile = import("./autoMode.ts").DefaultLaunchProfile;
@@ -83,7 +83,7 @@ export type RadialLauncherItemId = ProviderId | RadialLauncherActionId;
 export const AGENT_PROVIDERS: readonly AgentProviderId[] = CANVAS_LAUNCHER_ITEMS
   .filter((item): item is AgentProviderId => item !== "terminal");
 /** The providers whose usage limits CanvasTTY reads, in display order. */
-export const LIMIT_PROVIDERS: readonly LimitProviderId[] = ["codex", "claude", "qwen", "kimi", "opencode", "grok"];
+export const LIMIT_PROVIDERS: readonly LimitProviderId[] = ["codex", "claude", "qwen", "kimi", "opencode", "grok", "hermes"];
 // Keeps the safe provider subset proposed by @TroopJostle in PR #23 while
 // region, note, Browser, and Settings remain fixed top-level menu actions.
 export const DEFAULT_CANVAS_LAUNCHER_ITEMS: readonly CanvasLauncherItemId[] = [
@@ -1811,7 +1811,8 @@ export type LimitSource =
   | "qwen-cli"
   | "kimi-usage-api"
   | "opencode-go-usage-api"
-  | "grok-billing-api";
+  | "grok-billing-api"
+  | "hermes-usage-cli";
 export type LimitUnavailableReason =
   | "cli-not-found"
   | "not-authenticated"

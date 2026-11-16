@@ -90,7 +90,8 @@ const PATTERNS = new Set<CanvasPatternId>(["dots", "grid", "waves", "diagonal", 
 const APP_SKINS = new Set<AppSkinId>(["classic", "atelier", "signal", "greenhouse", "midnight"]);
 const MEDIA_FITS = new Set<MediaFit>(["cover", "contain"]);
 // 22: move the legacy F8 background toggle and add the temporary classic-design toggle.
-const SETTINGS_VERSION = 22;
+// 23: add the Hermes limits row for profiles that kept the full limit set.
+const SETTINGS_VERSION = 23;
 const APPEARANCE_SHORTCUT_SETTINGS_VERSION = 22;
 const GROK_LAUNCHER_SETTINGS_VERSION = 3;
 const EXPANDED_LIMIT_SETTINGS_VERSION = 5;
@@ -103,6 +104,9 @@ const PRE_QWEN_AGENT_PROVIDERS: AgentProviderId[] = [...LEGACY_AGENT_PROVIDERS, 
 const AGENT_PROVIDER_SET = new Set<AgentProviderId>(AGENT_PROVIDERS);
 const LEGACY_LIMIT_PROVIDERS: LimitProviderId[] = ["codex", "claude", "kimi"];
 const PRE_QWEN_LIMIT_PROVIDERS: LimitProviderId[] = [...LEGACY_LIMIT_PROVIDERS, "opencode", "grok"];
+/** The full limit set before the Hermes row existed; only such a selection gains it. */
+const PRE_HERMES_LIMIT_PROVIDERS: LimitProviderId[] = ["codex", "claude", "qwen", "kimi", "opencode", "grok"];
+const HERMES_LIMIT_SETTINGS_VERSION = 23;
 const LIMIT_PROVIDER_SET = new Set<LimitProviderId>(LIMIT_PROVIDERS);
 const CANVAS_LAUNCHER_ITEM_SET = new Set<CanvasLauncherItemId>(CANVAS_LAUNCHER_ITEMS);
 const RADIAL_LAUNCHER_ITEM_SET = new Set<RadialLauncherItemId>(RADIAL_LAUNCHER_ITEMS);
@@ -171,6 +175,8 @@ export class SettingsStore {
         );
       const needsQwenLimitMigration = persistedVersion < QWEN_SETTINGS_VERSION
         && isPreQwenDefaultSelection(persistedLimitProviders, PRE_QWEN_LIMIT_PROVIDERS);
+      const needsHermesLimitMigration = persistedVersion < HERMES_LIMIT_SETTINGS_VERSION
+        && isPreQwenDefaultSelection(persistedLimitProviders, PRE_HERMES_LIMIT_PROVIDERS);
       const needsProviderAdditionsMigration = persistedVersion < PROVIDER_ADDITIONS_SETTINGS_VERSION
         && persistedLauncherProviders !== null
         && ADDED_AGENT_PROVIDERS.some((provider) => !persistedLauncherProviders.includes(provider));
@@ -248,6 +254,9 @@ export class SettingsStore {
         migratedCandidate = { ...migratedCandidate, homeLauncherProviders: [...AGENT_PROVIDERS] };
       }
       if (needsQwenLimitMigration) {
+        migratedCandidate = { ...migratedCandidate, homeLimitProviders: [...LIMIT_PROVIDERS] };
+      }
+      if (needsHermesLimitMigration) {
         migratedCandidate = { ...migratedCandidate, homeLimitProviders: [...LIMIT_PROVIDERS] };
       }
       if (needsProviderAdditionsMigration) {

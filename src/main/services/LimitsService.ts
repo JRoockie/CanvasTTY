@@ -35,7 +35,7 @@ const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
-const LIMIT_PROVIDERS: readonly LimitProviderId[] = ["codex", "claude", "qwen", "kimi", "opencode", "grok"];
+const LIMIT_PROVIDERS: readonly LimitProviderId[] = ["codex", "claude", "qwen", "kimi", "opencode", "grok", "hermes"];
 
 interface CacheEntry<T = LimitsSnapshot> {
   cachedAt: number;
@@ -104,6 +104,7 @@ export class LimitsService {
   private lastGoodKimi: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
   private lastGoodOpenCode: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
   private lastGoodGrok: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
+  private lastGoodHermes: Extract<ProviderLimitsSnapshot, { state: "available" }> | null = null;
   private disposed = false;
 
   private readonly codexIdleMs: number;
@@ -184,6 +185,7 @@ export class LimitsService {
     this.lastGoodKimi = null;
     this.lastGoodOpenCode = null;
     this.lastGoodGrok = null;
+    this.lastGoodHermes = null;
   }
 
   private async refresh(): Promise<LimitsSnapshot> {
@@ -223,6 +225,7 @@ export class LimitsService {
       case "kimi": return this.loadKimi(checkedAt);
       case "opencode": return this.loadOpenCode(checkedAt);
       case "grok": return this.loadGrok(checkedAt);
+      case "hermes": return this.loadHermes(checkedAt);
     }
   }
 
@@ -414,6 +417,46 @@ export class LimitsService {
     }
   }
 
+  /**
+   * Hermes reports the windows of whatever provider its own config points at
+   * (`hermes usage --json`: rolling/weekly/monthly with percentages), so the card
+   * follows the CLI instead of guessing a provider or duplicating its credentials.
+   */
+  private async loadHermes(checkedAt: number): Promise<ProviderLimitsSnapshot> {
+    if (this.providerClis.get("hermes").state === "unavailable") {
+      return unavailable("hermes", "hermes-usage-cli", "cli-not-found", checkedAt);
+    }
+    if (this.disposed) {
+      return unavailable("hermes", "hermes-usage-cli", "protocol-error", checkedAt);
+    }
+    try {
+      const raw = await readHermesUsage(availableCli(this.providerClis, "hermes"));
+      const windows = normalizeHermesLimits(raw);
+      if (windows.length === 0) throw new LimitsAdapterError("not-authenticated");
+
+      const available: Extract<ProviderLimitsSnapshot, { state: "available" }> = {
+        provider: "hermes",
+        state: "available",
+        source: "hermes-usage-cli",
+        fetchedAt: Date.now(),
+        windows
+      };
+      this.lastGoodHermes = available;
+      return available;
+    } catch (error) {
+      const reason = adapterReason(error);
+      if (this.lastGoodHermes) {
+        return {
+          ...this.lastGoodHermes,
+          state: "stale",
+          failedAt: Date.now(),
+          reason
+        };
+      }
+      return unavailable("hermes", "hermes-usage-cli", reason, checkedAt);
+    }
+  }
+
   private async loadGrok(checkedAt: number): Promise<ProviderLimitsSnapshot> {
     if (this.providerClis.get("grok").state === "unavailable") {
       return unavailable("grok", "grok-billing-api", "cli-not-found", checkedAt);
@@ -562,6 +605,152 @@ async function readGrokUsage(clientVersion: string): Promise<unknown> {
     "x-xai-token-auth": "xai-grok-cli",
     "user-agent": `canvastty/${clientVersion}`
   });
+}
+
+type HermesWindowKind = "rolling" | "weekly" | "monthly";
+
+const HERMES_WINDOW_KINDS: ReadonlyArray<{ kind: HermesWindowKind; pattern: RegExp; windowMinutes: number | null }> = [
+  { kind: "rolling", pattern: /rolling|session|5\s*-?\s*h(our)?/u, windowMinutes: 300 },
+  { kind: "weekly", pattern: /week|7\s*-?\s*d(ay)?/u, windowMinutes: 10_080 },
+  { kind: "monthly", pattern: /month|30\s*-?\s*d(ay)?/u, windowMinutes: null }
+];
+
+/**
+ * `hermes usage --json` prints one JSON document and nothing else, but it exits non-zero,
+ * prints nothing, or takes its time when the CLI needs a login or the network is out.
+ */
+function readHermesUsage(cli: AvailableProviderCli | null): Promise<unknown> {
+  if (!cli) return Promise.reject(new LimitsAdapterError("cli-not-found"));
+  const launch = providerChildProcessLaunch(cli, ["usage", "--json"]);
+  return new Promise((resolve, reject) => {
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(launch.command, launch.args, {
+        shell: false,
+        env: { ...process.env, ...launch.environment },
+        stdio: ["pipe", "pipe", "pipe"],
+        ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {})
+      });
+    } catch {
+      reject(new LimitsAdapterError("cli-not-found"));
+      return;
+    }
+
+    let stdout = "";
+    let settled = false;
+    let timer: NodeJS.Timeout | null = null;
+    const finish = (settle: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      child.removeAllListeners();
+      child.stdout.removeAllListeners();
+      child.stderr.removeAllListeners();
+      try {
+        child.stdin.end();
+      } catch {
+        // The CLI may have exited already.
+      }
+      settle();
+    };
+
+    timer = setTimeout(() => {
+      finish(() => {
+        try {
+          child.kill();
+        } catch {
+          // Best-effort: the read already failed on time.
+        }
+        reject(new LimitsAdapterError("timeout"));
+      });
+    }, REQUEST_TIMEOUT_MS);
+    timer.unref();
+
+    child.stdin.end();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (Buffer.byteLength(stdout) > MAX_BUFFER_BYTES) {
+        finish(() => {
+          try {
+            child.kill();
+          } catch {
+            // Oversized output is a protocol failure either way.
+          }
+          reject(new LimitsAdapterError("protocol-error"));
+        });
+      }
+    });
+    child.stderr.resume();
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      finish(() => reject(new LimitsAdapterError(error.code === "ENOENT" ? "cli-not-found" : "protocol-error")));
+    });
+    child.once("close", (code) => {
+      finish(() => {
+        if (code !== 0) {
+          reject(new LimitsAdapterError("protocol-error"));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout) as unknown);
+        } catch {
+          reject(new LimitsAdapterError("protocol-error"));
+        }
+      });
+    });
+  });
+}
+
+function hermesWindowKind(label: unknown): HermesWindowKind | null {
+  if (typeof label !== "string") return null;
+  const normalized = label.toLowerCase();
+  for (const { kind, pattern } of HERMES_WINDOW_KINDS) {
+    if (pattern.test(normalized)) return kind;
+  }
+  return null;
+}
+
+function hermesUnavailableReason(reason: string): LimitUnavailableReason {
+  const normalized = reason.toLowerCase();
+  if (normalized.includes("timeout")) return "timeout";
+  if (normalized.includes("rate")) return "rate-limited";
+  if (normalized.includes("key") || normalized.includes("auth") || normalized.includes("login")
+    || normalized.includes("credential") || normalized.includes("subscription")) return "not-authenticated";
+  return "protocol-error";
+}
+
+export function normalizeHermesLimits(raw: unknown): LimitWindow[] {
+  if (!isRecord(raw)) throw new LimitsAdapterError("protocol-error");
+  const unavailableReason = typeof raw.unavailable_reason === "string" ? raw.unavailable_reason : null;
+  if (unavailableReason !== null && unavailableReason.trim() !== "") {
+    throw new LimitsAdapterError(hermesUnavailableReason(unavailableReason));
+  }
+  if (!Array.isArray(raw.windows)) throw new LimitsAdapterError("protocol-error");
+
+  const windows: LimitWindow[] = [];
+  for (const [index, candidate] of raw.windows.entries()) {
+    if (!isRecord(candidate)) continue;
+    const kind = hermesWindowKind(candidate.label);
+    const definition = HERMES_WINDOW_KINDS.find((entry) => entry.kind === kind) ?? null;
+    const usedPercent = numericValue(candidate.used_percent);
+    const resetsAt = epochMilliseconds(candidate.resets_at);
+    if (usedPercent === null && resetsAt === null) continue;
+    windows.push({
+      id: `hermes:${kind ?? index}`,
+      bucketId: "hermes",
+      slot: kind === "rolling" ? "primary" : "secondary",
+      isDefaultBucket: true,
+      label: kind === "rolling" ? "5h" : kind === "weekly" ? "7d" : kind === "monthly" ? "monthly" : cleanLabel(candidate.label),
+      usedPercent: usedPercent === null ? null : clampPercent(usedPercent),
+      used: null,
+      limit: null,
+      windowMinutes: definition?.windowMinutes ?? null,
+      resetsAt
+    });
+    if (windows.length >= MAX_WINDOWS) break;
+  }
+  return windows.slice(0, MAX_WINDOWS);
 }
 
 function openCodeAuthPaths(): string[] {

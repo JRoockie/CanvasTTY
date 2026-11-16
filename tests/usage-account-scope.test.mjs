@@ -479,7 +479,7 @@ test("history reads touch only Codex and Claude while get() keeps every provider
     const full = await service.get();
     assert.deepEqual(
       full.providers.map(({ provider, state, reason }) => ({ provider, state, reason })),
-      ["codex", "claude", "qwen", "kimi", "opencode", "grok"].map((provider) => ({
+      ["codex", "claude", "qwen", "kimi", "opencode", "grok", "hermes"].map((provider) => ({
         provider,
         state: "unavailable",
         reason: "cli-not-found"

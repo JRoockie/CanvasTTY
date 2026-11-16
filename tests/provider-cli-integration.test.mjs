@@ -62,7 +62,7 @@ test("limits short-circuit every missing provider to cli-not-found", async () =>
     const snapshot = await service.get();
     assert.deepEqual(
       snapshot.providers.map(({ provider, state, reason }) => ({ provider, state, reason })),
-      ["codex", "claude", "qwen", "kimi", "opencode", "grok"].map((provider) => ({
+      ["codex", "claude", "qwen", "kimi", "opencode", "grok", "hermes"].map((provider) => ({
         provider,
         state: "unavailable",
         reason: "cli-not-found"
