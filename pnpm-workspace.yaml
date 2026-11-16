@@ -1,0 +1,6 @@
+packages:
+  - integrations/even-g2
+onlyBuiltDependencies:
+  - electron-winstaller
+  - esbuild
+  - node-pty
