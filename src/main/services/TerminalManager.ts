@@ -3,6 +3,7 @@ import { codexPromptSubmit } from "../../shared/codexKeyboard.ts";
 import { ORCHESTRATION_ENV } from "./agent-browser/orchestration-protocol.ts";
 import { connectedLaunchEnvironment } from "../../agent-runtime/launch-environment.mjs";
 import { instrumentShellCodex, resumeShellCodex } from "./shellCodexLaunch.ts";
+import { StatusSignalWatchdog } from "./statusSignalWatchdog.ts";
 import type { HelperLaunch } from "./agentHelpers.ts";
 import { realpathSync, statSync } from "node:fs";
 import { constants as osConstants } from "node:os";
@@ -336,6 +337,10 @@ export class TerminalManager {
   private readonly startingOwners = new Map<string, string>();
   // What a card's first launch found in its CLI's own configuration, before the card exists.
   private readonly pendingConfiguredModes = new Map<string, { mode: string; source: string }>();
+  /** Turns a card that went quiet while claiming work back to «Простаивает» (statusSignalWatchdog.ts). */
+  private readonly statusWatchdog = new StatusSignalWatchdog({
+    onExpired: (id, silenceMs) => this.expireBusyStatus(id, silenceMs)
+  });
   // Whether the person acknowledged YOLO for a CLI (Settings: acknowledgedDangerousProfiles); unset allows it.
   private yoloAcknowledged: (provider: ProviderId) => boolean = () => true;
   // Set and cleared around a single synchronous session emit (see emitSession):
@@ -1433,6 +1438,8 @@ export class TerminalManager {
     }
 
     const nextStatus = signal.state;
+    // The card is held at what it just reported; silence longer than the watchdog allows turns it back to idle.
+    this.statusWatchdog.observe(id, nextStatus);
     if (nextStatus === "needs_approval" && (session.metadata.status !== "needs_approval"
       || (source === "hook" && signal.event !== "Notification"))) {
       session.approvalRequests = (session.approvalRequests ?? 0) + 1;
@@ -1465,6 +1472,23 @@ export class TerminalManager {
   }
 
   /**
+   * A card claimed work and then went quiet. The turn is either inside one very long tool call or its next hook never
+   * arrived; either way nothing confirms the work any more, so the card shows «Простаивает» and the log says why.
+   */
+  private expireBusyStatus(id: string, silenceMs: number): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    const claimed = session.metadata.status;
+    if (claimed !== "working" && claimed !== "needs_approval") return;
+    session.metadata.status = "idle";
+    delete session.workingInputRevision;
+    console.warn(
+      `CanvasTTY: card ${id} reported "${claimed}" and then no lifecycle signal for ${Math.round(silenceMs / 1000)}s; showing idle.`
+    );
+    this.emitSession(session.metadata);
+  }
+
+  /**
    * Keeps the final answer a result-capturing session reported with its turn's end (the Codex Stop hook, the OpenCode
    * plugin's session.idle); read back masked by answer(). In memory only, never saved.
    */
@@ -1488,6 +1512,7 @@ export class TerminalManager {
     if (next) return;
     for (const session of this.sessions.values()) {
       session.lifecycle = null;
+      this.statusWatchdog.forget(session.metadata.id);
       if (
         session.metadata.provider === "terminal"
         || session.metadata.status === "done"
@@ -1564,6 +1589,7 @@ export class TerminalManager {
 
     this.flushOutput(id, session);
     this.sessions.delete(id);
+    this.statusWatchdog.forget(id);
     this.isolationStarts.delete(id);
     this.wakeLaunchWaiters(session);
     // Closed: an open report goes to the app; a pending audit runs and reports there.

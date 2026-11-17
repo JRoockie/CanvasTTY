@@ -139,6 +139,25 @@ Hermes с недавних версий выполняет ход не в сво
 | `src/renderer/src/lib/sessionStatus.ts`, `lib/i18n.ts` | `statusRunning` — «Запущен» / «Running» |
 | `tests/hermes-hook-dispatcher.test.mjs`, `tests/agent-runtime-dispatched-lifecycle.test.mjs`, `tests/hermes-thread-sessions.test.mjs` | хук без карточки и с переносом согласия; диспетчерское событие доходит до своей карточки (и не до чужой); резолвер по папкам и поверхностям |
 
+### 8. Заявленная работа, которая замолчала, снова показывает «Простаивает»
+
+Статусы событийные: «Работает» — по хуку в начале хода, «Простаивает» — по хуку в конце. Если событие не дошло
+(шлюз перезапустился, согласие хука отбито, процесс умер), карточка залипала на «Работает» навсегда и врала.
+
+Теперь у каждой карточки есть сторож тишины (`statusSignalWatchdog.ts`): сигнал «работает»/«ждёт ответа» заводит
+окно в 5 минут и сбрасывает его каждым следующим сигналом, `idle` и закрытие карточки окно снимают. Истекло —
+статус `idle` («Простаивает»), а в лог приложения уходит строка, что карточка заявила работу и замолчала.
+
+Чтобы длинный ход не резался на ровном месте, «Работает» подпирается событием после каждого tool-call
+(`post_tool_call` → `working` в `HERMES_HOOKS`), а не только в начале хода.
+
+| Файл | Что делает |
+|---|---|
+| `src/main/services/statusSignalWatchdog.ts` | одно окно тишины на карточку, `observe`/`forget`/`dispose`, `STATUS_SIGNAL_TIMEOUT_MS` = 5 мин |
+| `src/main/services/TerminalManager.ts` | `applyProviderSignal` держит состояние, `expireBusyStatus` возвращает `idle` и пишет причину в лог |
+| `src/main/services/agent-runtime/ProviderRuntimeLaunch.ts` | `HERMES_HOOKS`: `post_tool_call` → `working` |
+| `tests/status-signal-watchdog.test.mjs` | окно, сброс, `idle`, `needs_approval`, `forget`, константа |
+
 ## Настройка после установки
 
 1. Лимиты видны только для включённых строк: Настройки → Агенты → «Отображение лимитов» →

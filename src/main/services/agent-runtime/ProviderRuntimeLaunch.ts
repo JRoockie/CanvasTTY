@@ -539,6 +539,9 @@ const KIMI_HOOKS: readonly HookMapping[] = [
 const HERMES_HOOKS: readonly HookMapping[] = [
   { event: "on_session_start", state: "idle" },
   { event: "pre_llm_call", state: "working" },
+  // A turn reports once at its start and once at its end, so a long turn with several tool calls would look silent.
+  // Hermes fires this event after every tool call, which keeps «Работает» backed by an event along the way.
+  { event: "post_tool_call", state: "working" },
   { event: "pre_approval_request", state: "needs_approval" },
   { event: "post_approval_response", state: "working" },
   { event: "on_session_end", state: "idle" }
