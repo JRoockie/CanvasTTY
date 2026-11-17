@@ -7,6 +7,7 @@ import type { MaterialService } from "../services/materials/MaterialService";
 import type { HandoffService } from "../services/materials/HandoffService";
 import { captureRejection, fileUrlPaths, plistPaths, textPaths, windowsFileNames } from "../services/materials/materialClipboard.ts";
 import { isId } from "../services/materials/materialState.ts";
+import { showOpenDialogForPerson } from "./nativeOpenDialog";
 import { assertMainRenderer } from "./registerIpc";
 import type { IpcRegistrar } from "./IpcReadinessGate";
 
@@ -120,7 +121,7 @@ export function registerMaterialIpc(ipcMain: IpcRegistrar, { materials, handoffs
     const owner = BrowserWindow.fromWebContents(event.sender);
     const defaultPath = typeof sessionId === "string" ? workingDirectory(sessionId) ?? undefined : undefined;
     const options: OpenDialogOptions = { properties: ["openDirectory", "createDirectory"], ...(defaultPath ? { defaultPath } : {}) };
-    const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+    const result = await showOpenDialogForPerson(owner, options);
     const selected = result.filePaths[0];
     if (result.canceled || !selected) return null;
     try {
@@ -139,7 +140,7 @@ async function pickFiles(event: IpcMainInvokeEvent, multiple: boolean): Promise<
   const options: OpenDialogOptions = {
     properties: multiple ? ["openFile", "multiSelections"] : ["openFile"]
   };
-  const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options);
+  const result = await showOpenDialogForPerson(owner, options);
   return result.canceled ? [] : result.filePaths;
 }
 

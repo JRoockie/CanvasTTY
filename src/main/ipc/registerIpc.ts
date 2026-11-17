@@ -1,4 +1,5 @@
 import { registerDesktopWindowIpc } from "./desktopWindowIpc";
+import { showOpenDialogForPerson } from "./nativeOpenDialog";
 import { registerLinuxDesktopWindowIpc } from "./linuxDesktopWindowIpc";
 import { realpath } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -335,9 +336,7 @@ export function registerIpc(ipcMain: IpcRegistrar, {
       defaultPath: typeof defaultPath === "string" ? defaultPath : settings.get().lastDirectory,
       properties: ["openDirectory", "createDirectory"]
     };
-    const result = owner
-      ? await dialog.showOpenDialog(owner, options)
-      : await dialog.showOpenDialog(options);
+    const result = await showOpenDialogForPerson(owner, options);
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
@@ -349,9 +348,7 @@ export function registerIpc(ipcMain: IpcRegistrar, {
       properties: ["openFile"],
       filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }]
     };
-    const result = owner
-      ? await dialog.showOpenDialog(owner, options)
-      : await dialog.showOpenDialog(options);
+    const result = await showOpenDialogForPerson(owner, options);
     const picked = result.filePaths[0];
     if (result.canceled || !picked) return null;
     // Save the file the person picked, not a link to it, so a later read is
@@ -393,9 +390,7 @@ export function registerIpc(ipcMain: IpcRegistrar, {
       title: "Choose a folder",
       properties: ["openDirectory"]
     };
-    const result = owner
-      ? await dialog.showOpenDialog(owner, options)
-      : await dialog.showOpenDialog(options);
+    const result = await showOpenDialogForPerson(owner, options);
     const selected = result.filePaths[0];
     if (result.canceled || !selected) return null;
     try {
@@ -1181,9 +1176,7 @@ async function pickPluginMediaLibrary(
     title: "Choose a music library",
     properties: ["openDirectory"]
   };
-  const result = owner
-    ? await dialog.showOpenDialog(owner, options)
-    : await dialog.showOpenDialog(options);
+  const result = await showOpenDialogForPerson(owner, options);
   const selected = result.filePaths[0];
   return result.canceled || !selected ? null : pluginMedia.addLibrary(pluginId, selected);
 }
