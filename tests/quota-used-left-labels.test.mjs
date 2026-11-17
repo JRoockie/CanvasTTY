@@ -62,24 +62,29 @@ test("the Codex and Claude normalizers keep 9 % spent as usedPercent 9 (not 91)"
   assert.deepEqual(normalizeClaudeLimits(claudePayload).map((window) => window.usedPercent), [9, 9]);
 });
 
-for (const [locale, used, left] of [
-  ["en", /9% used/, /91% left/],
-  ["ru", /использовано/, /осталось 91%/]
+for (const [locale, used] of [
+  ["en", /used 9%/],
+  ["ru", /исп 9%/]
 ]) {
   for (const [provider, windows] of [["codex", normalizeCodexLimits(codexPayload)], ["claude", normalizeClaudeLimits(claudePayload)]]) {
-    test(`HOME ${provider} row in ${locale} says on screen that 9 % is used and 91 % is left`, () => {
+    test(`HOME ${provider} row in ${locale} shows one short line per window with the used share`, () => {
       const html = render(provider, windows, locale);
       const text = visibleText(html);
-      assert.match(text, /9\s?%/u, text);
       assert.match(text, used, `the visible row must say the share is used: ${text}`);
-      assert.match(text, left, `the visible row must say what is left: ${text}`);
-      assert.doesNotMatch(text, locale === "en" ? /\b9% left/ : /осталось 9%/u, text);
-      // The hover/screen-reader line says both too.
+      assert.match(text, locale === "en" ? /5\s?h/ : /5\s?ч/u, text);
+      assert.equal(
+        (html.match(/limit-row__window-line/g) ?? []).length,
+        windows.length,
+        `one line per window: ${text}`
+      );
+      // The person chose the spent share: "left" lives only in the hover/screen-reader line.
+      assert.doesNotMatch(text, locale === "en" ? /\bleft\b/i : /осталось/u, text);
+      // No main number and no rail: both repeated the same share a third time.
+      assert.doesNotMatch(html, /limit-row__fill/);
+      assert.doesNotMatch(html, /limit-row__track/);
       const label = attribute(html, "aria-label");
       assert.match(label, locale === "en" ? /9% used/ : /использовано 9%/u, label);
       assert.match(label, locale === "en" ? /91% left/ : /осталось 91%/u, label);
-      // The bar is the used share.
-      assert.match(html, /limit-row__fill" style="width:9%"/);
     });
   }
 }

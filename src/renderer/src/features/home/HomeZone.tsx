@@ -525,6 +525,10 @@ function LimitRow({ row, locale, now, onOpenSettings }: { row: HomeLimitRow; loc
           ? null
           : limitReasonLabel(row.reason, locale);
   const extras = row.window ? row.windows.filter((window) => window.id !== row.window!.id) : [];
+  // One line per window, shortest window first (5 ч → 7 д → месяц); the primary window is a line
+  // like every other one — the big number and the rail above it repeated the same share a third time.
+  const windowLength = (window: HomeLimitWindow): number => window.windowMinutes ?? Number.MAX_SAFE_INTEGER;
+  const lines = row.window ? [row.window, ...extras].sort((a, b) => windowLength(a) - windowLength(b)) : [];
   const accessibleLabel = [
     providerLabel,
     meta,
@@ -538,29 +542,16 @@ function LimitRow({ row, locale, now, onOpenSettings }: { row: HomeLimitRow; loc
     <article className={`limit-row limit-row--${row.state}`} aria-label={accessibleLabel} title={accessibleLabel}>
       <ProviderIcon provider={row.provider} size="medium" />
       {row.window ? (
-        <span className="limit-row__metric">
-          <span className="limit-row__summary">
-            <span className="limit-row__share">
-              <strong>{formatPercent(row.window.usedPercent, locale)}</strong>
-              <span>{t(locale, "limitUsed")} · {limitLeft(row.window.usedPercent, locale)}</span>
+        <span className="limit-row__windows">
+          {lines.map((window) => (
+            <span className="limit-row__window-line" key={window.id}>
+              <span className="limit-row__window-length">{windowLabel(window.windowMinutes, locale)}</span>
+              <span className="limit-row__window-sep" aria-hidden="true">·</span>
+              <span className="limit-row__window-share">{t(locale, "limitUsedShort")} {formatPercent(window.usedPercent, locale)}</span>
+              <span className="limit-row__window-sep" aria-hidden="true">·</span>
+              <span className="limit-row__window-reset">{formatResetCountdown(window.resetsAt, now, locale)}</span>
             </span>
-            <span className="limit-row__countdown">{formatResetCountdown(row.window.resetsAt, now, locale)}</span>
-          </span>
-          <span className="limit-row__track" aria-hidden="true">
-            <i className="limit-row__fill" style={{ width: `${row.window.usedPercent}%` }} />
-          </span>
-          {extras.length > 0 && (
-            <span className="limit-row__windows">
-              {extras.map((window) => (
-                <span className="limit-row__window-line" key={window.id}>
-                  <span className="limit-row__window-length">{windowLabel(window.windowMinutes, locale)}</span>
-                  <span className="limit-row__window-share">{formatPercent(window.usedPercent, locale)}</span>
-                  <span className="limit-row__window-left">{limitLeft(window.usedPercent, locale)}</span>
-                  <span className="limit-row__window-reset">{formatResetCountdown(window.resetsAt, now, locale)}</span>
-                </span>
-              ))}
-            </span>
-          )}
+          ))}
         </span>
       ) : <span className="limit-row__empty">{stateLabel}
         {row.state !== "loading" && <button type="button" className="limits-settings-link"
