@@ -206,11 +206,12 @@ export class ProviderRuntimeLaunchAdapters {
     /** The card's own (already filtered) environment; the launch reads the person's OpenCode inline config from it. */
     environment: Readonly<Record<string, string | undefined>> = this.environment,
     /**
-     * The runtime identity this launch hands its terminal (`CANVASTTY_RUNTIME_*`). A provider whose hooks are
-     * dispatched by a process other than the one CanvasTTY started (Hermes routes a session through its own
-     * long-lived gateway) never inherits it, so such a provider's hook command carries it explicitly.
+     * The identity the provider's hook command carries (`CANVASTTY_RUNTIME_*`). A provider whose hooks run in the
+     * process CanvasTTY started inherits it from the launch environment; one whose hooks a shared process runs
+     * (Hermes' gateway) needs it inside the command, and gets a provider-wide dispatcher identity there instead of a
+     * card's — one config file cannot hold a different identity per card.
      */
-    sessionEnvironment: Readonly<Record<string, string>> = {}
+    hookIdentity: Readonly<Record<string, string>> = {}
   ): PreparedProviderRuntimeLaunch {
     const pluginRegistrations = this.options.pluginHooks?.list(provider) ?? [];
     const gate = decisions && this.decisionsSupported(provider);
@@ -280,7 +281,7 @@ export class ProviderRuntimeLaunchAdapters {
       return prepared([], hookEnvironment, this.acquireKimi(coreHooksEnabled, pluginCommands));
     }
     if (provider === "hermes") {
-      return prepared([], hookEnvironment, this.acquireHermes(coreHooksEnabled, pluginCommands, sessionEnvironment));
+      return prepared([], hookEnvironment, this.acquireHermes(coreHooksEnabled, pluginCommands, hookIdentity));
     }
     if (provider === "grok") return prepared([], hookEnvironment, this.acquireGrok(coreHooksEnabled, pluginCommands));
     return prepared([], hookEnvironment);
@@ -338,9 +339,9 @@ export class ProviderRuntimeLaunchAdapters {
   private acquireHermes(
     coreHooksEnabled: boolean,
     pluginCommands: readonly ProviderHookCommand[],
-    sessionEnvironment: Readonly<Record<string, string>>
+    hookIdentity: Readonly<Record<string, string>>
   ): () => void {
-    const signature = overlaySignature(coreHooksEnabled, pluginCommands, sessionEnvironment);
+    const signature = overlaySignature(coreHooksEnabled, pluginCommands, hookIdentity);
     if (!this.hermesOverlay || this.hermesOverlaySignature !== signature) {
       this.hermesOverlay?.cleanup();
       this.hermesOverlay = null;
@@ -351,7 +352,7 @@ export class ProviderRuntimeLaunchAdapters {
         this.platform,
         coreHooksEnabled,
         pluginCommands,
-        sessionEnvironment
+        hookIdentity
       );
       this.hermesOverlaySignature = signature;
     }
@@ -934,7 +935,7 @@ export class HermesRuntimeHooks {
     platform: NodeJS.Platform,
     coreHooksEnabled: boolean,
     pluginCommands: readonly ProviderHookCommand[],
-    sessionEnvironment: Readonly<Record<string, string>> = {}
+    hookIdentity: Readonly<Record<string, string>> = {}
   ): HermesRuntimeHooks {
     ensurePrivateDirectory(home);
     const path = join(home, "config.yaml");
@@ -942,7 +943,7 @@ export class HermesRuntimeHooks {
     this.recover(home);
     const original = readOptional(path);
     const commands = groupCommandsByEvent([
-      ...(coreHooksEnabled ? lifecycleCommandsWithEnvironment(HERMES_HOOKS, helper, platform, sessionEnvironment) : []),
+      ...(coreHooksEnabled ? lifecycleCommandsWithEnvironment(HERMES_HOOKS, helper, platform, hookIdentity) : []),
       ...pluginCommands
     ]);
     const mutated = mutateHermesHooks(original ?? "", commands, false);
@@ -1114,9 +1115,12 @@ function mutateHermesHooks(raw: string, commands: Record<string, string[]>, remo
     if (remove && entries.some((entry) => related(entry) && !owned(entry))) {
       throw new Error(`CanvasTTY Hermes lifecycle hook ownership changed for ${event}.`);
     }
+    // When adding, a hook command of ours that is not part of this set is a leftover from another build or an
+    // earlier run — its identity names a process that is gone, so it would only start a helper that reports nothing.
+    const kept = remove ? entries : entries.filter((entry) => !related(entry) || owned(entry));
     const next = remove
-      ? entries.filter((entry) => !owned(entry))
-      : [...entries, ...eventCommands.filter((command) => !entries.some((entry) => (
+      ? kept.filter((entry) => !owned(entry))
+      : [...kept, ...eventCommands.filter((command) => !kept.some((entry) => (
         isRecord(entry) && entry.command === command && entry.timeout === HOOK_TIMEOUT_SECONDS
       ))).map((command) => ({ command, timeout: HOOK_TIMEOUT_SECONDS }))];
     if (next.length > 0) document.setIn(["hooks", event], next);
@@ -1201,9 +1205,9 @@ function groupCommandsByEvent(commands: readonly ProviderHookCommand[]): Record<
 function overlaySignature(
   coreHooksEnabled: boolean,
   pluginCommands: readonly ProviderHookCommand[],
-  sessionEnvironment: Readonly<Record<string, string>> = {}
+  hookIdentity: Readonly<Record<string, string>> = {}
 ): string {
-  return JSON.stringify([coreHooksEnabled, pluginCommands, sessionEnvironment]);
+  return JSON.stringify([coreHooksEnabled, pluginCommands, hookIdentity]);
 }
 
 function hookCommand(
@@ -1237,6 +1241,10 @@ function lifecycleCommandsWithEnvironment(
  * would be read as the program name (the "command not found" older builds hit); `/usr/bin/env` applies the
  * variables instead. Windows keeps the plain command: Hermes for Windows has no equivalent prefix that survives
  * its no-shell spawn.
+ *
+ * The identity is the provider's dispatcher, not a card's: Hermes' gateway runs every card's turns and reads one
+ * `config.yaml`, so a command naming a card would report all of them as that one card. The dispatcher names the
+ * provider, and each event says which card it belongs to by Hermes' own conversation id.
  */
 function hookCommandWithEnvironment(
   helper: RuntimeHookHelperLaunch,

@@ -7,6 +7,7 @@ import { posix, win32 } from "node:path";
 import { AGENT_PROVIDERS, type ProviderId } from "../../../shared/contracts.ts";
 import {
   CLAUDE_HTTP_HOOK,
+  DISPATCHED_LIFECYCLE_TYPE,
   MAX_CHANNEL_MESSAGE_BYTES,
   MAX_ANSWER_CHARS,
   MAX_HOOK_INPUT_BYTES,
@@ -136,6 +137,17 @@ interface ParsedLifecycleMessage {
   lastAssistantMessage?: string;
 }
 
+/** A lifecycle event from a provider-shared dispatcher: the card is named by the provider's own conversation id. */
+interface ParsedDispatchedLifecycleMessage {
+  provider: Exclude<ProviderId, "terminal">;
+  capabilityToken: string;
+  state: RuntimeLifecycleState;
+  event: string;
+  turnId: string | null;
+  threadId: string;
+  result?: { text: string; truncated: boolean };
+}
+
 export interface RuntimeGatewayOptions {
   platform?: NodeJS.Platform;
   runtimeDirectory?: string;
@@ -145,6 +157,11 @@ export interface RuntimeGatewayOptions {
   firstMessageTimeoutMs?: number;
   onSignal?(terminalSessionId: string, signal: RuntimeLifecycleSignal): void;
   onAnswerCaptureRevoked?(terminalSessionId: string): void;
+  /**
+   * Which card owns a provider conversation, for a provider whose hooks are dispatched by a process CanvasTTY never
+   * started (Hermes' gateway). Without it a dispatched event is dropped: nothing is guessed.
+   */
+  resolveThreadSession?(provider: Exclude<ProviderId, "terminal">, threadId: string): Promise<string | null> | string | null;
   /**
    * Decision hooks: answers one tool call. `signal` aborts when the hook's socket closes, the session is revoked or
    * the gateway's deadline passes; the answer is then `ask`.
@@ -166,10 +183,13 @@ export class RuntimeGateway {
   private readonly onSignal: RuntimeGatewayOptions["onSignal"];
   private readonly onAnswerCaptureRevoked: RuntimeGatewayOptions["onAnswerCaptureRevoked"];
   private readonly onPermissionRequest: RuntimeGatewayOptions["onPermissionRequest"];
+  private onResolveThreadSession = undefined as RuntimeGatewayOptions["resolveThreadSession"];
   private readonly now: () => number;
   private readonly firstMessageTimeoutMs: number;
   private readonly checks = new Set<AbortController>();
   private readonly leases = new Map<string, RuntimeLease>();
+  /** Provider → the digest of the capability its shared dispatcher reports with (Hermes' gateway). */
+  private readonly dispatchers = new Map<string, Buffer>();
   private readonly sockets = new Set<AgentGatewaySocket>();
   private closed = false;
   private restartTimer: ReturnType<typeof setTimeout> | undefined;
@@ -194,6 +214,7 @@ export class RuntimeGateway {
     this.onSignal = options.onSignal;
     this.onAnswerCaptureRevoked = options.onAnswerCaptureRevoked;
     this.onPermissionRequest = options.onPermissionRequest;
+    this.onResolveThreadSession = options.resolveThreadSession;
     this.now = options.now ?? Date.now;
     this.httpHooksRequested = options.httpHooks === true && this.platform !== "win32";
   }
@@ -316,6 +337,34 @@ export class RuntimeGateway {
     return { address: this.endpoint, terminalSessionId, provider, capabilityToken };
   }
 
+  /**
+   * A capability for a provider whose lifecycle hooks run in a process CanvasTTY never started — Hermes' long-lived
+   * gateway, where one config serves every card. Such a dispatcher may report any card's state, naming the provider's
+   * own conversation id; the gateway resolves the card from it (see `resolveThreadSession`). One per provider per run:
+   * the command that carries it is the same for every card, so a launch no longer rewrites the provider's config.
+   */
+  registerDispatcher<P extends Exclude<ProviderId, "terminal">>(provider: P): {
+    address: string;
+    provider: P;
+    capabilityToken: string;
+  } {
+    if (!this.endpoint || (!this.server && !this.windowsTransport?.isRunning)) {
+      throw new Error("Agent runtime gateway must be started before launching agents.");
+    }
+    if (!AGENT_PROVIDER_SET.has(provider)) {
+      throw new Error("Agent runtime launch identity is invalid.");
+    }
+    const capabilityToken = randomBytes(32).toString("base64url");
+    this.dispatchers.get(provider)?.fill(0);
+    this.dispatchers.set(provider, tokenDigest(capabilityToken));
+    return { address: this.endpoint, provider, capabilityToken };
+  }
+
+  /** How a dispatched event finds its card; set once the launch adapter knows which cards are live. */
+  setThreadSessionResolver(resolver: RuntimeGatewayOptions["resolveThreadSession"]): void {
+    this.onResolveThreadSession = resolver;
+  }
+
   currentStatus(terminalSessionId: string): RuntimeLifecycleState | null {
     return this.leases.get(terminalSessionId)?.latest?.state ?? null;
   }
@@ -409,6 +458,8 @@ export class RuntimeGateway {
       }
     }
     this.leases.clear();
+    for (const digest of this.dispatchers.values()) digest.fill(0);
+    this.dispatchers.clear();
     const httpServer = this.httpServer;
     this.httpServer = null;
     this.httpPort = null;
@@ -490,6 +541,13 @@ export class RuntimeGateway {
             type: "ack",
             answerCapture
           })}\n`, "utf8"));
+        } else if (isDispatchedLifecycle(value)) {
+          // A provider-shared dispatcher names a conversation, not a card; the card is resolved after the ack, so the
+          // agent never waits on a store read.
+          const message = parseDispatchedLifecycleMessage(value);
+          this.assertDispatcher(message);
+          socket.write(Buffer.from(`${JSON.stringify({ v: RUNTIME_PROTOCOL_VERSION, type: "ack" })}\n`, "utf8"));
+          void this.dispatchLifecycle(message);
         } else {
           // The ack goes out before the app reacts: the hook (and the agent behind it) waits only for the check.
           const delivery = this.handleLifecycle(value);
@@ -547,6 +605,38 @@ export class RuntimeGateway {
     if (!tokenMatches(message.capabilityToken, lease.tokenDigest)) throw new Error("Runtime capability is invalid.");
     if (Boolean(lease.shellTracking) !== (message.invocationId !== undefined)) throw new Error("Runtime shell observation scope is invalid.");
     return this.applyLifecycle(lease, message);
+  }
+
+  /** A dispatched event is accepted only with the capability its provider's shared dispatcher was given. */
+  private assertDispatcher(message: ParsedDispatchedLifecycleMessage): void {
+    const digest = this.dispatchers.get(message.provider);
+    if (!digest || !tokenMatches(message.capabilityToken, digest)) throw new Error("Runtime capability is invalid.");
+  }
+
+  /**
+   * Applies a dispatched event to the card that owns its conversation. Runs after the hook has its ack, so a slow
+   * store read delays the card's status and never the agent.
+   */
+  private async dispatchLifecycle(message: ParsedDispatchedLifecycleMessage): Promise<void> {
+    try {
+      const terminalSessionId = await this.onResolveThreadSession?.(message.provider, message.threadId);
+      if (!terminalSessionId) return;
+      const lease = this.leases.get(terminalSessionId);
+      if (!lease || lease.provider !== message.provider) return;
+      const delivery = this.applyLifecycle(lease, {
+        terminalSessionId,
+        provider: message.provider,
+        state: message.state,
+        event: message.event,
+        turnId: message.turnId,
+        threadId: message.threadId,
+        ...(message.result === undefined ? {} : { result: message.result })
+      });
+      this.deliverLater(delivery);
+    } catch (error) {
+      console.warn("CanvasTTY could not apply a dispatched agent lifecycle event:",
+        error instanceof Error ? error.message : String(error));
+    }
   }
 
   private applyLifecycle(lease: RuntimeLease, message: Omit<ParsedLifecycleMessage, "capabilityToken">): Delivery | null {
@@ -928,6 +1018,52 @@ function isAnswerCaptureCheck(value: unknown): value is Record<string, unknown> 
 /** The turn-end events that carry a final answer: a Stop hook, or OpenCode's own session.idle (its plugin reads it). */
 function isResultEvent(provider: unknown, event: unknown): boolean {
   return event === "Stop" || (provider === "opencode" && event === "session.idle");
+}
+
+function isDispatchedLifecycle(value: unknown): boolean {
+  return isRecord(value) && value.type === DISPATCHED_LIFECYCLE_TYPE;
+}
+
+/**
+ * A lifecycle event from a provider-shared dispatcher: same states and events as `lifecycle`, but it names the
+ * provider's own conversation id instead of a card, and carries no shell/result-identity fields a card launch owns.
+ */
+function parseDispatchedLifecycleMessage(value: unknown): ParsedDispatchedLifecycleMessage {
+  if (!isRecord(value)) throw new Error("Runtime message must be an object.");
+  const keys = Object.keys(value).sort();
+  const expected = ["capabilityToken", "event", "provider", "state", "threadId", "turnId", "type", "v"];
+  if (value.result !== undefined) expected.push("result");
+  expected.sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error("Runtime message has an invalid schema.");
+  }
+  if (value.v !== RUNTIME_PROTOCOL_VERSION || value.type !== DISPATCHED_LIFECYCLE_TYPE) {
+    throw new Error("Runtime message version is unsupported.");
+  }
+  if (
+    typeof value.provider !== "string"
+    || !AGENT_PROVIDER_SET.has(value.provider as ProviderId)
+    || typeof value.capabilityToken !== "string"
+    || value.capabilityToken.length < 32
+    || typeof value.state !== "string"
+    || !(RUNTIME_STATES as readonly string[]).includes(value.state)
+    || typeof value.event !== "string"
+    || value.event.length === 0
+    || value.event.length > 80
+    || (value.turnId !== null && (typeof value.turnId !== "string" || value.turnId.length > 160))
+    || typeof value.threadId !== "string"
+  ) throw new Error("Runtime message fields are invalid.");
+  // Only the provider's own id shape, already in its stored form, is accepted.
+  if (normalizeThreadId(value.provider, value.threadId) !== value.threadId) {
+    throw new Error("Runtime threadId is invalid.");
+  }
+  if (value.result !== undefined && (
+    value.state !== "idle" || !isResultEvent(value.provider, value.event) || !isRecord(value.result)
+    || Object.keys(value.result).sort().join(",") !== "text,truncated"
+    || typeof value.result.text !== "string" || value.result.text.length > MAX_RESULT_CHARS
+    || typeof value.result.truncated !== "boolean"
+  )) throw new Error("Runtime result is invalid.");
+  return value as unknown as ParsedDispatchedLifecycleMessage;
 }
 
 function parseLifecycleMessage(value: unknown): ParsedLifecycleMessage {

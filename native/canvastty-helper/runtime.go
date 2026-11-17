@@ -41,6 +41,10 @@ const (
 
 var runtimeStates = []string{"idle", "working", "needs_approval"}
 
+// DISPATCHED_LIFECYCLE_TYPE in runtime-protocol.mjs: a hook dispatched by a provider-shared process names the
+// provider's own conversation id instead of a card identity, and CanvasTTY resolves which card that belongs to.
+const dispatchedLifecycleType = "lifecycle-thread"
+
 func isRuntimeState(value string) bool {
 	for _, state := range runtimeStates {
 		if state == value {
@@ -85,8 +89,47 @@ func normalizeThreadID(provider string, value any) (string, bool) {
 		if len(text) >= 5 && len(text) <= 124 && text[:4] == "ses_" && isAlnum(text[4:]) {
 			return text, true
 		}
+	case "hermes":
+		if isHermesSessionID(text) {
+			return text, true
+		}
 	}
 	return "", false
+}
+
+// isHermesSessionID is HERMES_SESSION_RE in runtime-protocol.mjs: the timestamped id its own surfaces mint, and the
+// `local-<digest>` id the ones with a store mint.
+func isHermesSessionID(s string) bool {
+	if len(s) >= 22 && len(s) <= 70 && s[:6] == "local-" {
+		return isHex(s[6:])
+	}
+	if len(s) < 16 || len(s) > 44 || s[8] != '_' || s[15] != '_' {
+		return false
+	}
+	if !isDigits(s[:8]) || !isDigits(s[9:15]) {
+		return false
+	}
+	hex := s[16:]
+	return len(hex) >= 6 && len(hex) <= 32 && isHex(hex)
+}
+
+func isDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+func isHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func isCanonicalUUID(s string) bool {

@@ -10,6 +10,7 @@ import {
   CAPTURE_RESULT_ENV
 } from "../../../agent-runtime/runtime-protocol.mjs";
 import type { AgentPromptChannel, RuntimeGateway, RuntimeLifecycleState } from "./RuntimeGateway.ts";
+import { HermesThreadSessions } from "./HermesThreadSessions.ts";
 import {
   ProviderRuntimeLaunchAdapters,
   codexLifecycleArgs,
@@ -77,7 +78,19 @@ export class AgentRuntimeBridge implements AgentRuntimeLaunchCoordinator {
   private readonly providers: ProviderRuntimeLaunchAdapters;
   /** Running sessions and whether each got the decision hook. */
   /** Live launches by card id; the entry object is the launch identity a late cleanup checks against. */
-  private readonly activeSessions = new Map<string, { decisions: boolean; trackIdentity?: boolean; channel?: boolean }>();
+  private readonly activeSessions = new Map<string, {
+    decisions: boolean;
+    trackIdentity?: boolean;
+    channel?: boolean;
+    /** The folder the card was launched in, so a dispatched Hermes event can find its card. */
+    cwd?: string;
+    /** When this launch started: two cards in one folder are told apart by it. */
+    startedAt?: number;
+  }>();
+  /** Hermes' own conversations → cards, for the events its shared gateway dispatches. */
+  private readonly threadSessions: HermesThreadSessions;
+  /** The provider-wide identity carried in Hermes' hook command (see `hookIdentity`). */
+  private dispatcher: { address: string; provider: "hermes"; capabilityToken: string } | null = null;
   private readonly options: AgentRuntimeBridgeOptions;
   private coreHooksEnabled: boolean;
   private claudeCodeMcpEnabled: boolean;
@@ -94,6 +107,17 @@ export class AgentRuntimeBridge implements AgentRuntimeLaunchCoordinator {
     this.decisionBudgetMs = options.decisionBudgetMs;
     this.claudeHttpHooks = options.claudeHttpHooks;
     this.providers = new ProviderRuntimeLaunchAdapters(options);
+    this.threadSessions = new HermesThreadSessions({
+      ...(options.hermesHomeDirectory ? { hermesHomeDirectory: options.hermesHomeDirectory } : {}),
+      cards: () => [...this.activeSessions]
+        .flatMap(([terminalSessionId, launch]) => (launch.cwd && launch.startedAt !== undefined
+          ? [{ terminalSessionId, cwd: launch.cwd, startedAt: launch.startedAt }]
+          : []))
+    });
+    // Events Hermes' shared gateway dispatches name a conversation; these cards are what it may resolve to.
+    this.gateway.setThreadSessionResolver?.((provider, threadId) => (
+      provider === "hermes" ? this.threadSessions.resolve(threadId) : null
+    ));
     this.coreHooksEnabled = options.coreHooksEnabled !== false;
     this.claudeCodeMcpEnabled = options.claudeCodeMcpEnabled === true;
     this.grokAcpEnabled = options.grokAcpEnabled === true;
@@ -164,22 +188,17 @@ export class AgentRuntimeBridge implements AgentRuntimeLaunchCoordinator {
       )
       : null;
     const httpHookBase = capability && this.coreHooksEnabled ? this.claudeHttpHookBase(input) : null;
-    // The session's own runtime identity, for a provider whose hooks are dispatched by another process.
-    const sessionEnvironment: Record<string, string> = capability ? {
-      [AGENT_RUNTIME_ENV.address]: capability.address,
-      [AGENT_RUNTIME_ENV.terminalSessionId]: capability.terminalSessionId,
-      [AGENT_RUNTIME_ENV.provider]: capability.provider,
-      [AGENT_RUNTIME_ENV.capabilityToken]: capability.capabilityToken
-    } : {};
+    // What the provider's hook command carries: this card's identity, or the provider's dispatcher (Hermes).
+    const hookIdentity: Record<string, string> = capability ? this.hookIdentity(input.provider, capability) : {};
     let prepared;
     try {
       prepared = this.providers.prepare(input.provider, input.terminalSessionId, this.coreHooksEnabled, decisions, budgetMs,
-        httpHookBase ?? undefined, input.accountHome, input.environment, sessionEnvironment);
+        httpHookBase ?? undefined, input.accountHome, input.environment, hookIdentity);
     } catch (error) {
       if (capability) this.gateway.revokeTerminalSession(input.terminalSessionId, capability.capabilityToken);
       throw error;
     }
-    const launch = { decisions, channel: Boolean(channelHelper) };
+    const launch = { decisions, channel: Boolean(channelHelper), cwd: input.cwd, startedAt: Date.now() };
     this.activeSessions.set(input.terminalSessionId, launch);
     let cleaned = false;
     return {
@@ -196,19 +215,63 @@ export class AgentRuntimeBridge implements AgentRuntimeLaunchCoordinator {
           [CAPTURE_ANSWER_ENV]: "1",
           [CAPTURE_ANSWER_EXPIRES_AT_ENV]: String(input.answerCaptureGrantExpiresAt)
         } : {}),
-        ...sessionEnvironment
+        // Hermes' dispatcher identity belongs in its hook command, not in the environment of the CLI it starts.
+        ...(input.provider === "hermes" ? {} : hookIdentity)
       },
       cleanup: () => {
         if (cleaned) return;
         cleaned = true;
         // A relaunch under the same card id owns the entry and the lease now; leave both to it.
         if (this.activeSessions.get(input.terminalSessionId) === launch) this.activeSessions.delete(input.terminalSessionId);
+        this.threadSessions.forget(input.terminalSessionId);
         try {
           prepared.releaseConfiguration();
         } finally {
           if (capability) this.gateway.revokeTerminalSession(input.terminalSessionId, capability.capabilityToken);
         }
       }
+    };
+  }
+
+  /**
+   * The identity a provider's hook command carries. Every provider but Hermes gets its own card's, which is exact
+   * because its hooks run in the process CanvasTTY started. Hermes' hooks run in its long-lived gateway, which reads
+   * one shared config for every card, so a card's identity there would report all cards as that one card: its command
+   * carries a provider-wide dispatcher instead, and the event itself says which card by Hermes' conversation id.
+   */
+  private hookIdentity(
+    provider: Exclude<ProviderId, "terminal">,
+    capability: { address: string; terminalSessionId: string; provider: Exclude<ProviderId, "terminal">; capabilityToken: string }
+  ): Record<string, string> {
+    if (provider !== "hermes") {
+      return {
+        [AGENT_RUNTIME_ENV.address]: capability.address,
+        [AGENT_RUNTIME_ENV.terminalSessionId]: capability.terminalSessionId,
+        [AGENT_RUNTIME_ENV.provider]: capability.provider,
+        [AGENT_RUNTIME_ENV.capabilityToken]: capability.capabilityToken
+      };
+    }
+    let dispatcher = this.dispatcher;
+    if (!dispatcher || dispatcher.address !== capability.address) {
+      const register = this.gateway.registerDispatcher;
+      // A gateway without dispatcher support (a launch adapter wired to a plainer gateway) keeps the card identity.
+      if (typeof register !== "function") {
+        return {
+          [AGENT_RUNTIME_ENV.address]: capability.address,
+          [AGENT_RUNTIME_ENV.terminalSessionId]: capability.terminalSessionId,
+          [AGENT_RUNTIME_ENV.provider]: capability.provider,
+          [AGENT_RUNTIME_ENV.capabilityToken]: capability.capabilityToken
+        };
+      }
+      // A new endpoint (the gateway restarted) needs a new dispatcher: the old command's address is gone with it.
+      dispatcher = register.call(this.gateway, "hermes") as NonNullable<typeof this.dispatcher>;
+      this.dispatcher = dispatcher;
+    }
+    const resolved = dispatcher;
+    return {
+      [AGENT_RUNTIME_ENV.address]: resolved.address,
+      [AGENT_RUNTIME_ENV.provider]: resolved.provider,
+      [AGENT_RUNTIME_ENV.capabilityToken]: resolved.capabilityToken
     };
   }
 

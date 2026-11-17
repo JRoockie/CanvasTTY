@@ -6,6 +6,10 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+// A repo checked out under a path with a space breaks URL.pathname (it percent-encodes the space and the spawn then
+// looks for `AI%20DATA`): the file URL has to be converted, not stringified.
+import { fileURLToPath } from "node:url";
+
 
 import {
   AGENT_RUNTIME_ENV,
@@ -40,7 +44,7 @@ for (const [provider, threadId] of [
 
   const capability = gateway.registerSession("terminal-one", provider);
   const helper = new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url);
-  const child = spawn(process.execPath, [helper.pathname, "working", "UserPromptSubmit"], {
+  const child = spawn(process.execPath, [fileURLToPath(helper), "working", "UserPromptSubmit"], {
     env: {
       ...process.env,
       [AGENT_RUNTIME_ENV.address]: capability.address,
@@ -75,7 +79,7 @@ test("a final answer longer than one runtime message still reports its turn and 
   const capability = gateway.registerSession("terminal-long", "codex", grantExpiresAt);
   await send(capability.address, message(capability, "working", "UserPromptSubmit", "turn-long"));
   const helper = new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url);
-  const child = spawn(process.execPath, [helper.pathname, "idle", "Stop"], {
+  const child = spawn(process.execPath, [fileURLToPath(helper), "idle", "Stop"], {
     env: {
       ...process.env,
       [CAPTURE_ANSWER_ENV]: "1",
@@ -215,7 +219,7 @@ test("RuntimeGateway propagates threadId for codex sessions with canonical UUID"
 
   const validUuid = "12345678-1234-1234-1234-123456789abc";
   const helper = new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url);
-  const child = spawn(process.execPath, [helper.pathname, "working", "UserPromptSubmit"], {
+  const child = spawn(process.execPath, [fileURLToPath(helper), "working", "UserPromptSubmit"], {
     env: {
       ...process.env,
       [AGENT_RUNTIME_ENV.address]: capability.address,
@@ -244,7 +248,7 @@ test("RuntimeGateway normalizes uppercase UUID to lowercase canonical UUID for c
   const upperUuid = "A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D";
   const lowerUuid = upperUuid.toLowerCase();
   const helper = new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url);
-  const child = spawn(process.execPath, [helper.pathname, "working", "UserPromptSubmit"], {
+  const child = spawn(process.execPath, [fileURLToPath(helper), "working", "UserPromptSubmit"], {
     env: {
       ...process.env,
       [AGENT_RUNTIME_ENV.address]: capability.address,
@@ -273,7 +277,7 @@ test("RuntimeGateway keeps Qwen conversation IDs and rejects non-canonical IDs",
   const validUuid = "12345678-1234-1234-1234-123456789abc";
   const helper = new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url);
 
-  const qwenChild = spawn(process.execPath, [helper.pathname, "working", "UserPromptSubmit"], {
+  const qwenChild = spawn(process.execPath, [fileURLToPath(helper), "working", "UserPromptSubmit"], {
     env: {
       ...process.env,
       [AGENT_RUNTIME_ENV.address]: qwenCap.address,
@@ -300,7 +304,7 @@ test("RuntimeGateway keeps Qwen conversation IDs and rejects non-canonical IDs",
     "Bearer token123456"
   ];
   for (const badId of malformedInputs) {
-    const childBad = spawn(process.execPath, [helper.pathname, "working", "UserPromptSubmit"], {
+    const childBad = spawn(process.execPath, [fileURLToPath(helper), "working", "UserPromptSubmit"], {
       env: {
         ...process.env,
         [AGENT_RUNTIME_ENV.address]: codexCap.address,
@@ -547,7 +551,7 @@ function reportStop(capability, grantExpiresAt) {
     delete environment[CAPTURE_ANSWER_ENV];
     delete environment[CAPTURE_ANSWER_EXPIRES_AT_ENV];
   }
-  const child = spawn(process.execPath, [helper.pathname, "idle", "Stop"], {
+  const child = spawn(process.execPath, [fileURLToPath(helper), "idle", "Stop"], {
     env: environment,
     stdio: ["pipe", "ignore", "pipe"]
   });

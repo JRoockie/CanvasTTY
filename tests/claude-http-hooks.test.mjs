@@ -5,6 +5,7 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { AGENT_RUNTIME_ENV, CAPTURE_RESULT_ENV, CLAUDE_HTTP_HOOK } from "../src/agent-runtime/runtime-protocol.mjs";
 import { AgentRuntimeBridge } from "../src/main/services/agent-runtime/AgentRuntimeBridge.ts";
@@ -19,7 +20,7 @@ import { RuntimeGateway } from "../src/main/services/agent-runtime/RuntimeGatewa
 import { claudeCoreSettingsKey } from "../src/main/services/terminalLaunch.ts";
 
 const POSIX = { skip: process.platform === "win32" ? "the loopback listener is POSIX-only" : false };
-const helperPath = new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url).pathname;
+const helperPath = fileURLToPath(new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url));
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "canvastty-http-hooks-"));

@@ -24,13 +24,20 @@ export const AGENT_RUNTIME_ENV = Object.freeze({
 
 export const RUNTIME_STATES = Object.freeze(["idle", "working", "needs_approval"]);
 
+// A provider whose turns run in a process CanvasTTY never started cannot be identified by the hook's environment:
+// one shared config holds the hooks for every session of that provider, and the process that runs them is shared
+// too. Such a hook names the provider's own conversation id instead, and CanvasTTY resolves the card it belongs to.
+// Hermes is the case: its turns run in a long-lived `hermes gateway`, so its hooks carry no session identity.
+export const DISPATCHED_LIFECYCLE_TYPE = "lifecycle-thread";
+
 // A provider's own conversation id, as its lifecycle hook reports it, lets a restored
 // card resume exactly that conversation. It ends up in the provider's argv, so only
 // UUID conversation ids are lower-cased, OpenCode uses `ses_` tokens, Hermes
 // uses timestamp-like ids, and MiniMax uses opaque safe session tokens.
 const CANONICAL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OPENCODE_SESSION_RE = /^ses_[A-Za-z0-9]{1,120}$/;
-const HERMES_SESSION_RE = /^\d{8}_\d{6}_[0-9a-f]{6,32}$/i;
+// Hermes mints a timestamped id on its own surfaces and a `local-<digest>` id on the ones that keep a store.
+const HERMES_SESSION_RE = /^(?:\d{8}_\d{6}_[0-9a-f]{6,32}|local-[0-9a-f]{16,64})$/i;
 const MINIMAX_SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
 export function normalizeThreadId(provider, value) {

@@ -4,6 +4,7 @@ import {
   AGENT_RUNTIME_ENV,
   CAPTURE_ANSWER_ENV,
   CAPTURE_ANSWER_EXPIRES_AT_ENV,
+  DISPATCHED_LIFECYCLE_TYPE,
   MAX_ANSWER_CHARS,
   MAX_RUNTIME_MESSAGE_BYTES,
   normalizeThreadId,
@@ -20,12 +21,26 @@ export async function reportLifecycle({ state, event, turnId = null, threadId, c
   const terminalSessionId = process.env[AGENT_RUNTIME_ENV.terminalSessionId];
   const provider = process.env[AGENT_RUNTIME_ENV.provider];
   const capabilityToken = process.env[AGENT_RUNTIME_ENV.capabilityToken];
-  if (!address || !terminalSessionId || !provider || !capabilityToken) return false;
+  if (!address || !provider || !capabilityToken) return false;
 
   const validThreadId = normalizeThreadId(provider, threadId);
+  // Without a card identity in the environment (a hook dispatched by a provider-shared process) the provider's own
+  // conversation id is the only handle on the card, so an event that has none is not reported at all.
+  const dispatched = !terminalSessionId;
+  if (dispatched && validThreadId === undefined) return false;
   const invocationId = normalizeThreadId("codex", process.env.CANVASTTY_SHELL_CODEX_INVOCATION);
 
-  const message = {
+  const message = dispatched ? {
+    v: RUNTIME_PROTOCOL_VERSION,
+    type: DISPATCHED_LIFECYCLE_TYPE,
+    provider,
+    capabilityToken,
+    state,
+    event,
+    turnId: normalizedId(turnId),
+    threadId: validThreadId,
+    ...(result === undefined ? {} : { result })
+  } : {
     v: RUNTIME_PROTOCOL_VERSION,
     type: "lifecycle",
     terminalSessionId,
@@ -39,7 +54,7 @@ export async function reportLifecycle({ state, event, turnId = null, threadId, c
     ...(result === undefined ? {} : { result })
   };
   const answerCaptureExpiresAt = Number(process.env[CAPTURE_ANSWER_EXPIRES_AT_ENV]);
-  const shouldCheckAnswerGrant = process.env[CAPTURE_ANSWER_ENV] === "1"
+  const shouldCheckAnswerGrant = !dispatched && process.env[CAPTURE_ANSWER_ENV] === "1"
     && Number.isFinite(answerCaptureExpiresAt) && answerCaptureExpiresAt > Date.now()
     && provider === "codex" && event === "Stop"
     && state === "idle" && typeof lastAssistantMessage === "string";

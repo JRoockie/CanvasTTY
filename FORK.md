@@ -97,6 +97,48 @@ CanvasTTY умел читать лимиты codex, claude, qwen, kimi, opencode
 | `src/renderer/src/App.tsx` | `changeSessionBounds` запоминает границы; `terminal.onSession` и стартовый список прогоняются через reconcile |
 | `tests/pending-bounds.test.mjs` | откат не происходит, эхо снимает защиту, просроченная защита не запирает карточку |
 
+### 7. Статус сессии Hermes не «недоступен», а живой (и у каждой карточки свой)
+
+Hermes с недавних версий выполняет ход не в своём процессе, а в долгоживущем
+`hermes gateway`, поэтому lifecycle-хуки запускаются из шлюза. Шлюз стартовал без
+`CANVASTTY_RUNTIME_*`, хелпер молча ничего не отправлял — и карточка сессии навсегда
+оставалась «Статус недоступен», хотя агент работал.
+
+Первым лечением стала идентичность карточки прямо в команде хука. Пока карточка одна, это
+работало; но конфиг `~/.hermes/config.yaml` один на профиль, команда хука у всех сессий
+общая, и переживал только последний запуск: его карточка получала события всех остальных,
+а сессии, запущенные раньше, замирали на «Запущен» / «Running».
+
+Теперь хук не называет карточку вообще:
+
+- команда хука несёт идентичность **провайдера**, а не карточки (`registerDispatcher`
+  в `RuntimeGateway`): адрес сокета, `provider=hermes`, capability-токен — один на запуск
+  приложения, поэтому конфиг больше не переписывается на каждом запуске;
+- событие называет разговор Hermes (`session_id` приходит в stdin хука) и уходит
+  сообщением `lifecycle-thread` — без `terminalSessionId`;
+- CanvasTTY сам решает, чья это карточка: берёт `cwd` и время создания разговора из
+  `~/.hermes/state.db` (таблица `sessions`, с подъёмом по `parent_session_id`) и сверяет с
+  папками и временем запуска живых карточек (`HermesThreadSessions.ts`). Две карточки в
+  одной папке различаются по времени: каждая берёт разговор, созданный сразу после её
+  запуска, а ветка (`/new`, сжатие) остаётся за карточкой своего родителя;
+- согласие Hermes (`~/.hermes/shell-hooks-allowlist.json`) привязано к паре (событие,
+  команда). `carryHookApprovals` переносит уже выданное согласие на обновлённую команду
+  этой же бинарки; согласие, которого не было, не выдумывается;
+- распознаются и «временны́е», и `local-<digest>` идентификаторы разговоров Hermes —
+  поэтому восстановленная карточка продолжает именно свой разговор (`--resume <id>`);
+- карточка сессии, которая ещё не прислала событие, называет состояние «Запущен» /
+  «Running» вместо «Статус недоступен».
+
+| Файл | Что делает |
+|---|---|
+| `src/main/services/agent-runtime/ProviderRuntimeLaunch.ts` | `hookCommandWithEnvironment`, `carryHookApprovals`, `scriptMtime`; `HermesRuntimeHooks.begin` принимает идентичность провайдера |
+| `src/main/services/agent-runtime/AgentRuntimeBridge.ts` | `hookIdentity` — карточке её собственная, Hermes — диспетчер провайдера; карточки с их `cwd` для резолвера |
+| `src/main/services/agent-runtime/HermesThreadSessions.ts` | разговор Hermes → карточка: `state.db` (`node:sqlite` в отдельном потоке), сверка папок, кэш привязок |
+| `src/main/services/agent-runtime/RuntimeGateway.ts` | `registerDispatcher`, `resolveThreadSession`, разбор и применение `lifecycle-thread` |
+| `src/agent-runtime/runtime-protocol.mjs`, `runtime-client.mjs`, `native/canvastty-helper/{hook,runtime}.go` | `DISPATCHED_LIFECYCLE_TYPE`, форма идентификаторов Hermes, отправка события без карточки |
+| `src/renderer/src/lib/sessionStatus.ts`, `lib/i18n.ts` | `statusRunning` — «Запущен» / «Running» |
+| `tests/hermes-hook-dispatcher.test.mjs`, `tests/agent-runtime-dispatched-lifecycle.test.mjs`, `tests/hermes-thread-sessions.test.mjs` | хук без карточки и с переносом согласия; диспетчерское событие доходит до своей карточки (и не до чужой); резолвер по папкам и поверхностям |
+
 ## Настройка после установки
 
 1. Лимиты видны только для включённых строк: Настройки → Агенты → «Отображение лимитов» →

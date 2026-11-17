@@ -16,6 +16,8 @@ export const AGENT_RUNTIME_ENV: Readonly<{
   capabilityToken: "CANVASTTY_RUNTIME_CAPABILITY";
 }>;
 export const RUNTIME_STATES: readonly ["idle", "working", "needs_approval"];
+/** A lifecycle event dispatched by a provider-shared process, naming the provider's own conversation id. */
+export const DISPATCHED_LIFECYCLE_TYPE: "lifecycle-thread";
 /** The provider's conversation id in the one form it may be stored or passed to its CLI, or undefined. */
 export function normalizeThreadId(provider: string, value: unknown): string | undefined;
 export const PERMISSION_GATE: Readonly<{

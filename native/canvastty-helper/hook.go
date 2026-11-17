@@ -89,24 +89,32 @@ func reportLifecycle(state, event string, turnID, threadID any, result *jsObject
 	terminalSessionID, _ := env(envRuntimeTerminalSessionID)
 	provider, _ := env(envRuntimeProvider)
 	capability, _ := env(envRuntimeCapability)
-	if address == "" || terminalSessionID == "" || provider == "" || capability == "" {
+	if address == "" || provider == "" || capability == "" {
 		return false
 	}
 	var normalizedTurn any
 	if text, ok := turnID.(string); ok && text != "" && jsLength(text) <= 160 {
 		normalizedTurn = text
 	}
-	message := obj(
-		"v", float64(runtimeProtocolVersion),
-		"type", "lifecycle",
-		"terminalSessionId", terminalSessionID,
-		"provider", provider,
-		"capabilityToken", capability,
-		"state", state,
-		"event", event,
-		"turnId", normalizedTurn,
-	)
-	if thread, ok := normalizeThreadID(provider, threadID); ok {
+	thread, hasThread := normalizeThreadID(provider, threadID)
+	// Without a card identity in the environment (a hook dispatched by a provider-shared process) the provider's own
+	// conversation id is the only handle on the card, so an event that has none is not reported at all.
+	dispatched := terminalSessionID == ""
+	if dispatched && !hasThread {
+		return false
+	}
+	messageType := "lifecycle"
+	if dispatched {
+		messageType = dispatchedLifecycleType
+	}
+	// Key order is the wire order the JS helper produces, so both implementations send the same line.
+	pairs := []any{"v", float64(runtimeProtocolVersion), "type", messageType}
+	if !dispatched {
+		pairs = append(pairs, "terminalSessionId", terminalSessionID)
+	}
+	pairs = append(pairs, "provider", provider, "capabilityToken", capability, "state", state, "event", event, "turnId", normalizedTurn)
+	message := obj(pairs...)
+	if hasThread {
 		message.set("threadId", thread)
 	}
 	if result != nil {

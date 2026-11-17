@@ -10,6 +10,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { FAIL_CLOSED_MESSAGE } from "../src/agent-runtime/permission-gate.mjs";
 import { AgentRuntimeBridge } from "../src/main/services/agent-runtime/AgentRuntimeBridge.ts";
@@ -61,8 +62,8 @@ test("real Claude Code on Ollama: a Bash call runs while CanvasTTY answers and i
   t.after(() => (open ? gateway.close() : undefined));
   const node = { command: process.execPath, args: [] };
   const bridge = new AgentRuntimeBridge(gateway, {
-    helper: { ...node, args: [new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url).pathname] },
-    permissionGate: { ...node, args: [new URL("../src/agent-runtime/permission-gate.mjs", import.meta.url).pathname] },
+    helper: { ...node, args: [fileURLToPath(new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url))] },
+    permissionGate: { ...node, args: [fileURLToPath(new URL("../src/agent-runtime/permission-gate.mjs", import.meta.url))] },
     runtimeDirectory: join(root, "rt"),
     openCodePluginPath: join(root, "opencode.mjs"),
     coreHooksEnabled: false

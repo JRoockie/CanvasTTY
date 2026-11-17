@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { CLAUDE_HTTP_HOOK } from "../src/agent-runtime/runtime-protocol.mjs";
 import { AgentRuntimeBridge } from "../src/main/services/agent-runtime/AgentRuntimeBridge.ts";
@@ -56,8 +57,8 @@ test("real Claude Code: lifecycle over HTTP, SessionStart and decisions through 
   t.after(() => gateway.close());
   const node = { command: process.execPath, args: [] };
   const bridge = new AgentRuntimeBridge(gateway, {
-    helper: { ...node, args: [new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url).pathname] },
-    permissionGate: { ...node, args: [new URL("../src/agent-runtime/permission-gate.mjs", import.meta.url).pathname] },
+    helper: { ...node, args: [fileURLToPath(new URL("../src/agent-runtime/hook-helper.mjs", import.meta.url))] },
+    permissionGate: { ...node, args: [fileURLToPath(new URL("../src/agent-runtime/permission-gate.mjs", import.meta.url))] },
     runtimeDirectory: join(root, "rt"),
     openCodePluginPath: join(root, "opencode.mjs"),
     claudeHttpHooks: () => ({ ok: true })

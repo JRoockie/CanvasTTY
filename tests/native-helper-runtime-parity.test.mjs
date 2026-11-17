@@ -38,6 +38,16 @@ function runtimeEnvironment(address, provider, extra = {}) {
   });
 }
 
+/** A hook dispatched by a provider-shared process: the address and capability, never a card identity. */
+function dispatcherEnvironment(address, provider, extra = {}) {
+  return baseEnvironment({
+    [AGENT_RUNTIME_ENV.address]: address,
+    [AGENT_RUNTIME_ENV.provider]: provider,
+    [AGENT_RUNTIME_ENV.capabilityToken]: "c".repeat(43),
+    ...extra
+  });
+}
+
 /** Masks the random request id after checking it is a v4 UUID. */
 function masked(raw) {
   let parsed;
@@ -308,7 +318,12 @@ const HOOK_CASES = [
   { label: "Codex answer capture, a hexadecimal expiry", provider: "codex", state: "idle", event: "Stop", grant: true, env: { [CAPTURE_ANSWER_ENV]: "1", [CAPTURE_ANSWER_EXPIRES_AT_ENV]: "0x1fffffffffffff" }, input: { last_assistant_message: "answer" } },
   { label: "Claude never asks for the answer grant", provider: "claude", state: "idle", event: "Stop", grant: true, env: { [CAPTURE_ANSWER_ENV]: "1", [CAPTURE_ANSWER_EXPIRES_AT_ENV]: String(Date.now() + 600_000) }, input: { last_assistant_message: "answer" } },
   { label: "a gateway that never acknowledges", state: "idle", event: "Stop", silent: true, input: {} },
-  { label: "no identity", state: "idle", event: "Stop", noIdentity: true, input: {} }
+  { label: "no identity", state: "idle", event: "Stop", noIdentity: true, input: {} },
+  // A dispatched hook names the provider's conversation instead of a card (Hermes' gateway runs them all).
+  { label: "dispatched Hermes turn", provider: "hermes", dispatcher: true, state: "working", event: "pre_llm_call", input: { session_id: `local-${"0123456789abcdef".repeat(4)}`, turn_id: "t1" } },
+  { label: "dispatched Hermes turn with a timestamped id", provider: "hermes", dispatcher: true, state: "idle", event: "on_session_end", input: { session_id: "20261117_021821_5581a5c4" } },
+  { label: "dispatched turn with no conversation id", provider: "hermes", dispatcher: true, state: "working", event: "pre_llm_call", input: { turn_id: "t1" } },
+  { label: "dispatched turn with an id another provider mints", provider: "hermes", dispatcher: true, state: "working", event: "pre_llm_call", input: { session_id: "0F8FAD5B-D9CB-469F-A165-70867728950E" } }
 ];
 
 test("lifecycle hook: both implementations send the same lines and exit the same way", OPTIONS, async () => {
@@ -321,7 +336,9 @@ test("lifecycle hook: both implementations send the same lines and exit the same
         else connection.send({ v: 1, type: "ack" });
       });
       const provider = entry.provider ?? "claude";
-      const env = entry.noIdentity ? baseEnvironment(entry.env) : runtimeEnvironment(gateway.path, provider, entry.env ?? {});
+      const env = entry.noIdentity ? baseEnvironment(entry.env)
+        : entry.dispatcher ? dispatcherEnvironment(gateway.path, provider, entry.env ?? {})
+        : runtimeEnvironment(gateway.path, provider, entry.env ?? {});
       const result = await runOnce(implementation.hook(entry.state, entry.event), { env, input: entry.raw ?? JSON.stringify(entry.input) });
       results.push({
         implementation: implementation.name,
