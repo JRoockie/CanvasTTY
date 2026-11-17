@@ -101,6 +101,7 @@ import {
 } from "./lib/shortcuts";
 import { homeGridPixelSize, homeLayoutFitsGrid, placeHomeWidget } from "./features/home/homeLayout";
 import { boundsInsideRegion, translateBounds } from "./features/workspace/canvasRegions";
+import { rememberPendingBounds, reconcilePendingBounds, type PendingBounds } from "./features/workspace/pendingBounds";
 import { DEFAULT_SESSION_SIZE, findNearHomeSessionPosition } from "./features/workspace/sessionPlacement";
 import { useMaterials } from "./features/materials/useMaterials";
 const HandoffDialog = lazy(() =>
@@ -340,6 +341,8 @@ export function App(): React.JSX.Element {
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const pendingSessionPlacements = useRef<SessionBounds[]>([]);
+  // Bounds the person just committed: they outrank launch-time snapshots until main echoes them.
+  const pendingSessionBounds = useRef(new Map<string, PendingBounds>());
   const [limits, setLimits] = useState<LimitsSnapshot | null>(null);
   const [limitsLoadState, setLimitsLoadState] = useState<LimitsLoadState>("loading");
   const [limitsRevision, setLimitsRevision] = useState(0);
@@ -542,7 +545,8 @@ export function App(): React.JSX.Element {
     // Cards removed before the startup list arrives: that list is older and must not restore them.
     const removedBeforeList = new Set<string>();
     const unsubscribeSession = window.canvasTTY.terminal.onSession(({ session }) => {
-      if (active) setSessions((current) => upsertSession(current, session));
+      if (active) setSessions((current) => reconcilePendingBounds(
+        upsertSession(current, session), pendingSessionBounds.current, Date.now()));
     });
     const unsubscribeGitRisk = window.canvasTTY.terminal.onGitRisk((report) => {
       if (active) setClosedGitRisks((current) => [...current.filter((entry) => entry.id !== report.id), report].slice(-8));
@@ -568,7 +572,8 @@ export function App(): React.JSX.Element {
         if (!active) return;
         setSettings(snapshot.settings);
         setAgentAvailability(snapshot.availability);
-        setSessions((current) => mergeSessionSnapshots(current, snapshot.sessions, removedBeforeList));
+        setSessions((current) => reconcilePendingBounds(
+          mergeSessionSnapshots(current, snapshot.sessions, removedBeforeList), pendingSessionBounds.current, Date.now()));
         setPlugins(snapshot.plugins);
         if (isHomeCamera.current) setCamera(homeCamera(snapshot.settings.homeGridSize));
       })
@@ -857,6 +862,7 @@ export function App(): React.JSX.Element {
   }, [settings.locale, showToast]);
 
   const changeSessionBounds = useCallback((id: string, bounds: SessionBounds): void => {
+    rememberPendingBounds(pendingSessionBounds.current, id, bounds, Date.now());
     setSessions((current) => current.map((session) => session.id === id
       ? { ...session, position: bounds.position, size: bounds.size }
       : session));
