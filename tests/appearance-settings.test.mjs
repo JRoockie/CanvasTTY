@@ -122,9 +122,13 @@ test("four or more HOME limit rows switch to bounded compact geometry", () => {
   assert.match(styles, /\.limits-list--dense\s*\{[^}]*padding:\s*10px;[^}]*gap:\s*6px;/u);
   assert.match(styles, /\.limit-row\s*\{[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;[^}]*container:\s*limit-row\s*\/\s*size;/u);
   assert.match(styles, /@container\s+limit-row\s*\(max-height:\s*48px\)/u);
-  assert.match(styles, /\.limit-row\s*>\s*\.provider-icon--medium\s*\{[^}]*--provider-icon-art-size:\s*24px;[^}]*height:\s*32px;/u);
-  assert.match(source, /formatPercent\(row\.window\.usedPercent,\s*locale\)[\s\S]*formatResetCountdown\(row\.window\.resetsAt,\s*now,\s*locale\)/u);
-  assert.match(styles, /\.limit-row__summary strong\s*\{[^}]*font-size:\s*22px;/u);
-  assert.match(styles, /\.limit-row__summary\s*>\s*span\s*\{[^}]*font-size:\s*11px;/u);
-  assert.match(styles, /\.limit-row__track\s*\{[^}]*height:\s*4px;/u);
+  assert.match(styles, /\.limit-row\s*>\s*\.provider-icon\s*\{[^}]*justify-self:\s*center;/u);
+  // One line per window, and the line carries the same three facts the rail and the headline repeated: length,
+  // share spent, countdown. The row has no headline number and no bar of its own any more.
+  assert.match(
+    source,
+    /lines\.map\(\(window\)[\s\S]*formatPercent\(window\.usedPercent,\s*locale\)[\s\S]*formatResetCountdown\(window\.resetsAt,\s*now,\s*locale\)/u
+  );
+  assert.doesNotMatch(source, /limit-row__(?:track|fill|summary|share)"/u);
+  assert.match(styles, /\.limit-row__windows\s*\{[^}]*display:\s*grid;[^}]*gap:\s*4px;/u);
 });
