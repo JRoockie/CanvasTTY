@@ -34,7 +34,10 @@ async function ipcModules({ platform = process.platform, shell = {}, terminalFil
     "../../shared/contracts": contracts, "../../shared/contracts.ts": contracts,
     "./PluginBrowserOpenBroker": { PluginBrowserOpenBroker },
     "./desktopWindowIpc": { registerDesktopWindowIpc() {} },
-    "./linuxDesktopWindowIpc": { registerLinuxDesktopWindowIpc() {} }
+    "./linuxDesktopWindowIpc": { registerLinuxDesktopWindowIpc() {} },
+    // The fork routes every folder/file panel through this wrapper (native sheet → app-modal in
+    // fullscreen); these tests exercise terminal and mascot file opening, so the panel only has to exist.
+    "./nativeOpenDialog": { showOpenDialogForPerson: async () => ({ canceled: true, filePaths: [] }) }
   });
   const load = async (path) => {
     const { code } = transformSync(await readFile(path, "utf8"), { loader: "ts", format: "cjs", target: "es2022" });
