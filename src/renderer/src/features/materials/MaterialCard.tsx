@@ -202,6 +202,21 @@ export function MaterialCard({
     applyBounds({ position: material.position, size: material.size });
   };
 
+  // Capture can be lost without a pointerup (the card is re-layered, re-focused or another
+  // surface takes the pointer). The person already moved the card, so what it shows now is
+  // the commit; a real pointercancel still puts it back.
+  const commitDrag = (event?: React.PointerEvent<HTMLElement>): void => {
+    if (!dragState.current || (event && dragState.current.pointerId !== event.pointerId)) return;
+    dragState.current = null;
+    onBoundsChange(material.id, liveBounds.current);
+  };
+
+  const commitResize = (event?: React.PointerEvent<HTMLDivElement>): void => {
+    if (!resizeState.current || (event && resizeState.current.pointerId !== event.pointerId)) return;
+    resizeState.current = null;
+    onBoundsChange(material.id, liveBounds.current);
+  };
+
   const drawing = remarking.mode === "draw";
   const toggleRemark = (): void => {
     if (drawing) {
@@ -238,7 +253,7 @@ export function MaterialCard({
         onPointerMove={drag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        onLostPointerCapture={cancelDrag}
+        onLostPointerCapture={commitDrag}
       >
         <span className="material-card__title" title={material.location ?? material.name}>
           <UiIcon name={materialIcon(material.kind)} size="1.35em" />
@@ -337,7 +352,7 @@ export function MaterialCard({
           onPointerMove={resize}
           onPointerUp={endResize}
           onPointerCancel={endResize}
-          onLostPointerCapture={cancelResize}
+          onLostPointerCapture={commitResize}
         />
       ))}
     </article>

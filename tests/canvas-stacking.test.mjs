@@ -114,16 +114,27 @@ test("a pointercancel snaps the card back; losing capture commits what the perso
     cancel();
     assert.deepEqual(applied, [saved], `${name}: an ended gesture is untouched`);
   }
-  // Capture lost without a pointerup is the end of the gesture, not a reason to undo it:
-  // the lost-capture handlers commit the live bounds and only pointercancel reverts.
-  for (const [file, source] of [["terminal/TerminalCard.tsx", card], ["notes/StickyNoteCard.tsx", await read("notes/StickyNoteCard.tsx")]]) {
+  // Every card kind follows the same rule: capture lost without a pointerup ends the gesture
+  // with a commit, and only a real pointercancel puts the card back.
+  for (const file of [
+    "terminal/TerminalCard.tsx",
+    "notes/StickyNoteCard.tsx",
+    "plugins/PluginCanvasCard.tsx",
+    "materials/MaterialCard.tsx",
+    "files/FileBrowserCard.tsx",
+    "browser/BrowserCard.tsx",
+    "workspace/CanvasRegionCard.tsx"
+  ]) {
+    const source = file === "terminal/TerminalCard.tsx" ? card : await read(file);
     for (const name of ["commitDrag", "commitResize"]) {
       const body = source.slice(source.indexOf(`const ${name} = `), source.indexOf("};", source.indexOf(`const ${name} = `)));
-      assert.match(body, /onBoundsChange\(/u, `${file}: ${name} commits`);
+      assert.match(body, /onBoundsChange\(|onChangeBounds\(/u, `${file}: ${name} commits`);
       assert.doesNotMatch(body, /applyLiveBounds|applyBounds/u, `${file}: ${name} never reverts`);
     }
     assert.match(source, /onLostPointerCapture=\{commitDrag\}/u, `${file}: a drag commits on lost capture`);
     assert.match(source, /onLostPointerCapture=\{commitResize\}/u, `${file}: a resize commits on lost capture`);
+  }
+  for (const [file, source] of [["terminal/TerminalCard.tsx", card], ["notes/StickyNoteCard.tsx", await read("notes/StickyNoteCard.tsx")]]) {
     assert.match(source, /onPointerCancel=\{endDrag\}|onPointerCancel=\{endResize\}/u, `${file}: pointercancel still ends the gesture`);
   }
   const region = await read("workspace/CanvasRegionCard.tsx");

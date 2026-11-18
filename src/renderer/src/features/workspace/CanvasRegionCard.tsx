@@ -157,6 +157,22 @@ export function CanvasRegionCard({
     applyBounds({ position: region.position, size: region.size });
   };
 
+  // Capture can be lost without a pointerup (the card is re-layered, re-focused or another
+  // surface takes the pointer). The person already moved the card, so what it shows now is
+  // the commit; a real pointercancel still puts it back.
+  const commitDrag = (event?: React.PointerEvent<HTMLButtonElement>): void => {
+    if (!dragState.current || (event && dragState.current.pointerId !== event.pointerId)) return;
+    dragState.current = null;
+    onBoundsChange(region.id, liveBounds.current, "move");
+    onMovePreview(region.id, null);
+  };
+
+  const commitResize = (event?: React.PointerEvent<HTMLDivElement>): void => {
+    if (!resizeState.current || (event && resizeState.current.pointerId !== event.pointerId)) return;
+    resizeState.current = null;
+    onBoundsChange(region.id, liveBounds.current, "resize");
+  };
+
   return (
     <article
       className="canvas-region"
@@ -176,7 +192,7 @@ export function CanvasRegionCard({
         onPointerMove={drag}
         onPointerUp={endDrag}
         onPointerCancel={cancelDrag}
-        onLostPointerCapture={cancelDrag}
+        onLostPointerCapture={commitDrag}
       >{region.title}</button>
       {RESIZE_DIRECTIONS.map((direction) => (
         <div
@@ -188,7 +204,7 @@ export function CanvasRegionCard({
           onPointerMove={resize}
           onPointerUp={endResize}
           onPointerCancel={cancelResize}
-          onLostPointerCapture={cancelResize}
+          onLostPointerCapture={commitResize}
         />
       ))}
     </article>

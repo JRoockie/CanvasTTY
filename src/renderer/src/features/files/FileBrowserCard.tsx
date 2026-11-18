@@ -223,6 +223,21 @@ export function FileBrowserCard({
     resizeState.current = null;
   };
 
+  // Capture can be lost without a pointerup (the card is re-layered, re-focused or another
+  // surface takes the pointer). The person already moved the card, so what it shows now is
+  // the commit; a real pointercancel still puts it back.
+  const commitDrag = (event?: React.PointerEvent<HTMLElement>): void => {
+    if (!dragState.current || (event && dragState.current.pointerId !== event.pointerId)) return;
+    dragState.current = null;
+    onChangeBounds(liveBounds.current);
+  };
+
+  const commitResize = (event?: React.PointerEvent<HTMLDivElement>): void => {
+    if (!resizeState.current || (event && resizeState.current.pointerId !== event.pointerId)) return;
+    resizeState.current = null;
+    onChangeBounds(liveBounds.current);
+  };
+
   const startResize = (event: React.PointerEvent<HTMLDivElement>, direction: ResizeDirection): void => {
     event.preventDefault();
     event.stopPropagation();
@@ -295,7 +310,7 @@ export function FileBrowserCard({
         onPointerMove={drag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        onLostPointerCapture={cancelDrag}
+        onLostPointerCapture={commitDrag}
       >
         <span className="file-browser-card__title">
           <UiIcon name="folder" size="1.69em" />
@@ -427,7 +442,7 @@ export function FileBrowserCard({
           onPointerMove={resize}
           onPointerUp={endResize}
           onPointerCancel={endResize}
-          onLostPointerCapture={cancelResize}
+          onLostPointerCapture={commitResize}
         />
       ))}
     </article>
