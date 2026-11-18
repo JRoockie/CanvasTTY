@@ -102,6 +102,11 @@ import {
 import { homeGridPixelSize, homeLayoutFitsGrid, placeHomeWidget } from "./features/home/homeLayout";
 import { boundsInsideRegion, translateBounds } from "./features/workspace/canvasRegions";
 import { rememberPendingBounds, reconcilePendingBounds, type PendingBounds } from "./features/workspace/pendingBounds";
+import {
+  BROWSER_BOUNDS_ID,
+  createPendingCanvasBounds,
+  reconcileSettingsBounds
+} from "./features/settings/pendingCanvasBounds";
 import { DEFAULT_SESSION_SIZE, findNearHomeSessionPosition } from "./features/workspace/sessionPlacement";
 import { useMaterials } from "./features/materials/useMaterials";
 const HandoffDialog = lazy(() =>
@@ -343,6 +348,12 @@ export function App(): React.JSX.Element {
   const pendingSessionPlacements = useRef<SessionBounds[]>([]);
   // Bounds the person just committed: they outrank launch-time snapshots until main echoes them.
   const pendingSessionBounds = useRef(new Map<string, PendingBounds>());
+  // The same rule for every card whose bounds live in settings (notes, files, plugins, browser).
+  const pendingCanvasBounds = useRef(createPendingCanvasBounds());
+  /** Applies a whole settings snapshot handed over by the main process, keeping the person's own commits. */
+  const applySettingsSnapshot = useCallback((next: AppSettings): void => {
+    setSettings(reconcileSettingsBounds(next, pendingCanvasBounds.current, Date.now()));
+  }, []);
   const [limits, setLimits] = useState<LimitsSnapshot | null>(null);
   const [limitsLoadState, setLimitsLoadState] = useState<LimitsLoadState>("loading");
   const [limitsRevision, setLimitsRevision] = useState(0);
@@ -565,12 +576,12 @@ export function App(): React.JSX.Element {
     });
 
     const unsubscribeSettings = window.canvasTTY.settings.onChanged((next) => {
-      if (active) setSettings(next);
+      if (active) applySettingsSnapshot(next);
     });
     void loadCriticalSnapshot(window.canvasTTY)
       .then((snapshot) => {
         if (!active) return;
-        setSettings(snapshot.settings);
+        applySettingsSnapshot(snapshot.settings);
         setAgentAvailability(snapshot.availability);
         setSessions((current) => reconcilePendingBounds(
           mergeSessionSnapshots(current, snapshot.sessions, removedBeforeList), pendingSessionBounds.current, Date.now()));
@@ -691,10 +702,10 @@ export function App(): React.JSX.Element {
   const persistSettings = useCallback(async (patch: Partial<AppSettings>): Promise<void> => {
     await persistSettingsUpdate(
       (nextPatch) => window.canvasTTY.settings.update(nextPatch),
-      (updated) => setSettings(updated),
+      (updated) => applySettingsSnapshot(updated),
       patch
     );
-  }, []);
+  }, [applySettingsSnapshot]);
 
   const saveSettings = useCallback(async (patch: Partial<AppSettings>): Promise<void> => {
     try {
@@ -707,11 +718,11 @@ export function App(): React.JSX.Element {
   const recheckAgentClis = useCallback(async (): Promise<void> => {
     const result = await window.canvasTTY.agents.recheck();
     setAgentAvailability(result.availability);
-    setSettings(result.settings);
+    applySettingsSnapshot(result.settings);
     setLimits(null);
     setLimitsLoadState("loading");
     setLimitsRevision((current) => current + 1);
-  }, []);
+  }, [applySettingsSnapshot]);
 
   const createSession = useCallback(async (
     provider: ProviderId,
@@ -842,7 +853,7 @@ export function App(): React.JSX.Element {
         providedMediaRef.current = { path: selection.path };
       }
       const updated = await window.canvasTTY.settings.update({ mediaPath: selection.path });
-      setSettings(updated);
+      applySettingsSnapshot(updated);
       setMediaData(selection.dataUrl);
     } catch {
       providedMediaRef.current = null;
@@ -854,7 +865,7 @@ export function App(): React.JSX.Element {
     try {
       const updated = await window.canvasTTY.settings.update({ mediaPath: null });
       mediaReadGenerationRef.current += 1;
-      setSettings(updated);
+      applySettingsSnapshot(updated);
       setMediaData(null);
     } catch {
       showToast(t(settings.locale, "mediaFailed"));
@@ -901,6 +912,8 @@ export function App(): React.JSX.Element {
   }, [activeSessionId, changeSessionBounds, ready, sessions, settings.terminalBorderSkin]);
 
   const changePluginCanvasBounds = useCallback((id: string, bounds: SessionBounds): void => {
+    // A settings snapshot built before this commit must not pull the plugin card back.
+    rememberPendingBounds(pendingCanvasBounds.current.pluginCanvas, id, bounds, Date.now());
     const pluginCanvas = settingsRef.current.pluginCanvas.map((instance) => instance.id === id
       ? { ...instance, position: bounds.position, size: bounds.size }
       : instance);
@@ -910,6 +923,8 @@ export function App(): React.JSX.Element {
   }, [saveSettings]);
 
   const changeBrowserBounds = useCallback((browserCanvas: BrowserCanvasState): void => {
+    rememberPendingBounds(pendingCanvasBounds.current.browserCanvas, BROWSER_BOUNDS_ID,
+      { position: browserCanvas.position, size: browserCanvas.size }, Date.now());
     browserCanvasRef.current = browserCanvas;
     setSettings((current) => ({ ...current, browserCanvas }));
     void saveSettings({ browserCanvas });
@@ -937,6 +952,8 @@ export function App(): React.JSX.Element {
   }, [saveSettings]);
 
   const changeStickyNoteBounds = useCallback((id: string, bounds: SessionBounds): void => {
+    // The note keeps the bounds the person left it at until main echoes exactly those.
+    rememberPendingBounds(pendingCanvasBounds.current.stickyNotes, id, bounds, Date.now());
     const stickyNotes = settingsRef.current.stickyNotes.map((note) => note.id === id
       ? { ...note, position: bounds.position, size: bounds.size }
       : note);
@@ -1444,6 +1461,7 @@ export function App(): React.JSX.Element {
   }, [ready, restoreFileCard]);
 
   const changeFileCardBounds = useCallback((id: string, bounds: SessionBounds): void => {
+    rememberPendingBounds(pendingCanvasBounds.current.fileCards, id, bounds, Date.now());
     updateFileCard(id, { position: bounds.position, size: bounds.size });
   }, [updateFileCard]);
 
@@ -1962,7 +1980,7 @@ export function App(): React.JSX.Element {
     if (!homeEditDraft || !homeLayoutFitsGrid(homeEditDraft.homeLayout, homeEditDraft.homeGridSize)) return;
     try {
       const updated = await window.canvasTTY.settings.update(homeEditDraft);
-      setSettings(updated);
+      applySettingsSnapshot(updated);
       setHomeEditDraft(null);
     } catch {
       showToast(t(settings.locale, "settingsFailed"));

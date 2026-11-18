@@ -91,11 +91,23 @@ CanvasTTY умел читать лимиты codex, claude, qwen, kimi, opencode
 Теперь собственные границы, отправленные в main, считаются авторитетными, пока main не
 вернёт ровно их; окно 3 с страхует от потерянного эха.
 
+То же правило распространено на карточки, чьи границы живут в настройках (заметки, файлы,
+плагины, браузер): любой снапшот настроек — ответ на более ранний патч, бродкаст, перечитывание —
+применяется целиком, поэтому собранный до коммита человека возвращал старые `position`/`size`
+и карточка уезжала назад под курсор. Теперь коммит выигрывает у такого снапшота.
+
+Вторая половина правила — на стороне карточки: потеря pointer capture посреди жеста больше не
+считается отменой. Человек карточку уже сдвинул, поэтому фиксируется то, что она показывает;
+возврат к сохранённым границам остаётся только у настоящего `pointercancel`.
+
 | Файл | Что делает |
 |---|---|
 | `src/renderer/src/features/workspace/pendingBounds.ts` | `rememberPendingBounds` / `reconcilePendingBounds` — держит закоммиченные границы, снимает запись по эху, истекает по `PENDING_BOUNDS_GRACE_MS` |
-| `src/renderer/src/App.tsx` | `changeSessionBounds` запоминает границы; `terminal.onSession` и стартовый список прогоняются через reconcile |
-| `tests/pending-bounds.test.mjs` | откат не происходит, эхо снимает защиту, просроченная защита не запирает карточку |
+| `src/renderer/src/features/settings/pendingCanvasBounds.ts` | то же правило для `stickyNotes` / `fileCards` / `pluginCanvas` / `browserCanvas`: `reconcileSettingsBounds` правит любой снапшот настроек перед применением |
+| `src/renderer/src/App.tsx` | `changeSessionBounds` запоминает границы; `terminal.onSession` и стартовый список прогоняются через reconcile; `applySettingsSnapshot` — единственная точка применения снапшота настроек; `change*Bounds` для заметок/файлов/плагинов/браузера запоминают коммит |
+| `src/renderer/src/features/terminal/TerminalCard.tsx`, `features/notes/StickyNoteCard.tsx` | `commitDrag` / `commitResize` на `onLostPointerCapture`; `pointercancel` по-прежнему возвращает сохранённые границы |
+| `tests/pending-bounds.test.mjs` | откат не происходит, эхо снимает защиту, просроченная защита не запирает карточку, снапшот настроек не возвращает заметку/файл/плагин/браузер |
+| `tests/sticky-note-gestures.test.mjs`, `tests/canvas-stacking.test.mjs` | потеря capture фиксирует то, что человек сделал; возврат — только по `pointercancel` |
 
 ### 7. Статус сессии Hermes не «недоступен», а живой (и у каждой карточки свой)
 

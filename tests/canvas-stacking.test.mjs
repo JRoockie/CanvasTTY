@@ -96,7 +96,7 @@ test("per-session canvas state forgets closed sessions and keeps its identity wh
   assert.match(source, /setMasterPixelSkinSessionIds\(\(current\) => keepLiveIds\(current, liveSessionIds\)\)/u);
 });
 
-test("a drag or resize cancelled by lost pointer capture snaps the card back to its saved bounds", async () => {
+test("a pointercancel snaps the card back; losing capture commits what the person sees, not a revert", async () => {
   const read = (path) => readFile(new URL(`../src/renderer/src/features/${path}`, import.meta.url), "utf8");
   const card = await read("terminal/TerminalCard.tsx");
   for (const name of ["cancelDrag", "cancelResize"]) {
@@ -113,6 +113,18 @@ test("a drag or resize cancelled by lost pointer capture snaps the card back to 
     assert.equal(state.current, null);
     cancel();
     assert.deepEqual(applied, [saved], `${name}: an ended gesture is untouched`);
+  }
+  // Capture lost without a pointerup is the end of the gesture, not a reason to undo it:
+  // the lost-capture handlers commit the live bounds and only pointercancel reverts.
+  for (const [file, source] of [["terminal/TerminalCard.tsx", card], ["notes/StickyNoteCard.tsx", await read("notes/StickyNoteCard.tsx")]]) {
+    for (const name of ["commitDrag", "commitResize"]) {
+      const body = source.slice(source.indexOf(`const ${name} = `), source.indexOf("};", source.indexOf(`const ${name} = `)));
+      assert.match(body, /onBoundsChange\(/u, `${file}: ${name} commits`);
+      assert.doesNotMatch(body, /applyLiveBounds|applyBounds/u, `${file}: ${name} never reverts`);
+    }
+    assert.match(source, /onLostPointerCapture=\{commitDrag\}/u, `${file}: a drag commits on lost capture`);
+    assert.match(source, /onLostPointerCapture=\{commitResize\}/u, `${file}: a resize commits on lost capture`);
+    assert.match(source, /onPointerCancel=\{endDrag\}|onPointerCancel=\{endResize\}/u, `${file}: pointercancel still ends the gesture`);
   }
   const region = await read("workspace/CanvasRegionCard.tsx");
   const cancelDrag = region.slice(region.indexOf("const cancelDrag = "), region.indexOf("};", region.indexOf("const cancelDrag = ")));

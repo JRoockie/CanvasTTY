@@ -1134,6 +1134,21 @@ function TerminalCardView({
     applyLiveBounds({ position: session.position, size: session.size });
   };
 
+  // Capture can be lost without a pointerup — the card is re-layered, re-focused or the
+  // terminal below it takes the pointer mid-gesture. The person already moved the card, so
+  // what it shows now is the commit; only a real pointercancel puts it back.
+  const commitDrag = (event?: React.PointerEvent<HTMLElement>): void => {
+    if (!dragState.current || (event && dragState.current.pointerId !== event.pointerId)) return;
+    dragState.current = null;
+    onBoundsChange(session.id, liveBounds.current);
+  };
+
+  const commitResize = (event?: React.PointerEvent<HTMLDivElement>): void => {
+    if (!resizeState.current || (event && resizeState.current.pointerId !== event.pointerId)) return;
+    resizeState.current = null;
+    onBoundsChange(session.id, liveBounds.current);
+  };
+
   const startResize = (event: React.PointerEvent<HTMLDivElement>, direction: ResizeDirection): void => {
     event.preventDefault();
     event.stopPropagation();
@@ -1414,7 +1429,7 @@ function TerminalCardView({
         onPointerMove={drag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        onLostPointerCapture={cancelDrag}
+        onLostPointerCapture={commitDrag}
       >
         <div className="terminal-card__identity">
           <ProviderIcon provider={session.provider} size="small" />
@@ -1508,7 +1523,7 @@ function TerminalCardView({
       {pixelSkinTheme && (["top", "right", "bottom", "left"] as const).map((edge) => (
         <div key={edge} className={`terminal-card__skin-drag terminal-card__skin-drag--${edge}`}
           aria-hidden="true" onPointerDown={startDrag} onPointerMove={drag} onPointerUp={endDrag}
-          onPointerCancel={endDrag} onLostPointerCapture={cancelDrag} />
+          onPointerCancel={endDrag} onLostPointerCapture={commitDrag} />
       ))}
       {pixelControls && terminalActions}
       {optionsOpen && hasOptions && (
@@ -1641,7 +1656,7 @@ function TerminalCardView({
           onPointerMove={resizeCard}
           onPointerUp={endResize}
           onPointerCancel={endResize}
-          onLostPointerCapture={cancelResize}
+          onLostPointerCapture={commitResize}
         />
       ))}
     </article>

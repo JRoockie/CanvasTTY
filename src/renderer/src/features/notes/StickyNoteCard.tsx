@@ -186,6 +186,20 @@ export function StickyNoteCard({
     applyBounds(state.startBounds);
   };
 
+  // Capture can be lost without a pointerup — the note is re-layered or re-focused mid-gesture.
+  // The person already moved it, so what it shows now is the commit; a pointercancel still reverts.
+  const commitDrag = (event?: React.PointerEvent<HTMLElement>): void => {
+    if (!dragState.current || (event && dragState.current.pointerId !== event.pointerId)) return;
+    dragState.current = null;
+    onBoundsChange(note.id, liveBounds.current);
+  };
+
+  const commitResize = (event?: React.PointerEvent<HTMLDivElement>): void => {
+    if (!resizeState.current || (event && resizeState.current.pointerId !== event.pointerId)) return;
+    resizeState.current = null;
+    onBoundsChange(note.id, liveBounds.current);
+  };
+
   const startResize = (event: React.PointerEvent<HTMLDivElement>, direction: ResizeDirection): void => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -267,7 +281,7 @@ export function StickyNoteCard({
         onPointerMove={drag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        onLostPointerCapture={cancelDrag}
+        onLostPointerCapture={commitDrag}
       >
         <span><UiIcon name="sticky-note" size="1.15em" />{t(locale, "stickyNote")}</span>
         <button
@@ -303,7 +317,7 @@ export function StickyNoteCard({
           onPointerMove={resize}
           onPointerUp={endResize}
           onPointerCancel={endResize}
-          onLostPointerCapture={cancelResize}
+          onLostPointerCapture={commitResize}
         />
       ))}
     </article>

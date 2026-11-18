@@ -52,25 +52,41 @@ for (const kind of ["drag", "resize"]) {
     }
   });
 
-  for (const cancel of ["onPointerCancel", "onLostPointerCapture"]) {
-    test(`note ${kind} ${cancel} restores original bounds without saving`, () => {
-      const h = noteGesture({ zoom: 0.5 });
-      try {
-        const handlers = h.handlers(kind);
-        handlers.onPointerDown(event(10, 20));
-        handlers.onPointerMove(event(110, 80));
-        handlers[cancel](event(0, 0, { type: cancel === "onPointerCancel" ? "pointercancel" : "lostpointercapture", buttons: 0 }));
-        handlers.onPointerUp(event(200, 100, { type: "pointerup", buttons: 0 }));
-        assert.deepEqual(h.commits, []);
-        assert.equal(h.bounds().transform, "translate(100px, 200px)");
-        assert.equal(h.bounds().width, 300);
-        assert.equal(h.bounds().height, 220);
-        handlers.onPointerDown(event(110, 80));
-        handlers.onPointerUp(event(110, 80, { type: "pointerup", buttons: 0 }));
-        assert.deepEqual(h.commits, [{ id: "note-a", bounds: initial }], "next click cannot persist the cancelled preview");
-      } finally { h.close(); }
-    });
-  }
+  test(`note ${kind} pointercancel restores original bounds without saving`, () => {
+    const h = noteGesture({ zoom: 0.5 });
+    try {
+      const handlers = h.handlers(kind);
+      handlers.onPointerDown(event(10, 20));
+      handlers.onPointerMove(event(110, 80));
+      handlers.onPointerCancel(event(0, 0, { type: "pointercancel", buttons: 0 }));
+      handlers.onPointerUp(event(200, 100, { type: "pointerup", buttons: 0 }));
+      assert.deepEqual(h.commits, []);
+      assert.equal(h.bounds().transform, "translate(100px, 200px)");
+      assert.equal(h.bounds().width, 300);
+      assert.equal(h.bounds().height, 220);
+      handlers.onPointerDown(event(110, 80));
+      handlers.onPointerUp(event(110, 80, { type: "pointerup", buttons: 0 }));
+      assert.deepEqual(h.commits, [{ id: "note-a", bounds: initial }], "next click cannot persist the cancelled preview");
+    } finally { h.close(); }
+  });
+
+  test(`note ${kind} losing capture keeps what the person moved instead of reverting it`, () => {
+    const h = noteGesture({ zoom: 0.5 });
+    try {
+      const handlers = h.handlers(kind);
+      handlers.onPointerDown(event(10, 20));
+      handlers.onPointerMove(event(110, 80));
+      // Capture can vanish without a pointerup; the gesture is over, the move is not undone.
+      handlers.onLostPointerCapture(event(0, 0, { type: "lostpointercapture", buttons: 0 }));
+      const expected = kind === "drag"
+        ? { position: { x: 300, y: 320 }, size: initial.size }
+        : { position: initial.position, size: { width: 500, height: 340 } };
+      assert.deepEqual(h.commits, [{ id: "note-a", bounds: expected }]);
+      assert.equal(h.bounds().transform, `translate(${expected.position.x}px, ${expected.position.y}px)`);
+      handlers.onPointerUp(event(200, 100, { type: "pointerup", buttons: 0 }));
+      assert.equal(h.commits.length, 1, "a later pointerup does not commit twice");
+    } finally { h.close(); }
+  });
 
   test(`note ${kind} ignores hover and other pointers`, () => {
     const h = noteGesture();

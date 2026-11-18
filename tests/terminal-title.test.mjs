@@ -147,6 +147,7 @@ async function rendererCard(initial) {
     onRename: async (id, title) => { assert.equal(id, "rename-card"); renames.push(title); session = { ...session, title, titleCustomized: true }; },
     onRenameEnd: () => { ended++; editing = false; },
     startDrag: noop, drag: noop, endDrag: noop, cancelDrag: noop, activateSummary: noop, activateSummaryDouble: noop,
+    commitDrag: noop, commitResize: noop,
     ProviderIcon: "provider-icon", pixelControls: null, terminalActions: null, pluginDecorations: { badges: [] },
     t: (_locale, key) => key, locale: "en", focusActivation: "click", sessionStatusLabel: () => "idle"
   };
